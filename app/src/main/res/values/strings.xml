@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">vibe-collector</string>
+
+    <string name="accessibility_service_label">vibe-collector capture</string>
+    <string name="accessibility_service_summary">Notices code copied from AI chatbots so it can be filed into your project.</string>
+    <string name="accessibility_service_description">vibe-collector uses this service for two things. First, it reads the clipboard, because Android only allows the focused app and accessibility services to read it, and that is the only way to see the code you copy out of a chatbot. Second, it notices when a chatbot window is in front so capture can be limited to those apps. It never reads, stores or transmits the contents of your screen. Everything stays on this device until you tap save.</string>
+
+    <string name="notification_channel_capture">Captured code</string>
+    <string name="notification_channel_capture_desc">Asks whether code copied from a chatbot should be saved into a project.</string>
+    <string name="notification_channel_service">Capture service</string>
+    <string name="notification_channel_service_desc">Shows that vibe-collector is watching the clipboard.</string>
+
+    <string name="bubble_channel">Floating button</string>
+    <string name="bubble_label">vibe-collector</string>
+</resources>
