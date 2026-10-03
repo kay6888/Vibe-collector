@@ -3,7 +3,7 @@
 Android app that catches the code your AI chatbot just wrote for you, works out what to
 call the files, drops them into a project folder, and lets you browse everything later.
 
-No cloud account, no API key required, nothing leaves the device unless you export it.
+No cloud account or API key is required. Captures stay on-device unless you export them or explicitly use the optional AI structure endpoint.
 
 ## How it works
 
@@ -16,8 +16,8 @@ Accessibility service, which is the one sanctioned way for an app to observe cop
 3. `CodeBlockParser` pulls the fenced blocks apart and works out a filename for each one
    (`main.py`, `src/app/user.service.ts`, a `File:` heading, a `# path/to/x.js` comment
    header, a `// filename: x.js` line, and so on).
-4. If the filename is only a guess, you get a notification: **Save**, **Discard**, or
-   **Save all**.
+4. Each capture gets its own notification with **Save** and **Discard** actions. Guessed
+   filenames always wait in the Inbox for review—even when **Yes to all** is enabled.
 5. Saved files land in a project folder. Empty folders are created for you.
 
 A **project structure** can be generated first — paste an ASCII tree, a bullet list, an
@@ -27,6 +27,11 @@ English description, but that is strictly optional and off by default.
 
 A floating bubble can sit over the chat app so you can jump back and forth without
 leaving the conversation.
+
+If you do not want to enable Accessibility, use Android's **Share** action (or
+**Process text**) to send chatbot text to vibe-collector, or open **Inbox → Paste or
+import code**. Monitoring waits for a new copy event and does not import the clipboard
+contents already present when the service starts.
 
 ## Requirements
 
@@ -38,8 +43,8 @@ leaving the conversation.
 
 1. Install `app-debug.apk` (or the release APK from CI).
 2. Open the app and grant the prompted permissions.
-3. Enable the accessibility service: **Settings → Accessibility → vibe-collector**.
-   This is required for clipboard capture and cannot be granted from inside the app.
+3. Optional: enable the accessibility service: **Settings → Accessibility →
+   vibe-collector** for automatic clipboard capture. Share and paste/import work without it.
 4. Enable notifications (Android 13+ asks separately).
 5. Optional: enable the floating bubble and allow **Display over other apps**.
 
@@ -66,11 +71,15 @@ touches the disk.
 
 | Setting | What it does |
 | --- | --- |
-| Capture | Master switch for watching the clipboard |
-| Collect on copy | Capture automatically instead of only showing the notification |
-| Notifications | Show the save/discard prompt. Off means captures queue in **Inbox** |
-| Yes to all | Save everything without asking (use with care) |
+| Capture | Master switch for automatic clipboard capture |
+| Copy collect | Enable or disable capture of new copies |
+| Pause capture | Pause automatic capture for an hour, or resume it |
+| Notifications | Show save/discard prompts. Off means captures queue in **Inbox** |
+| Yes to all | Save immediately only when filenames were clearly supplied |
+| Files already exist | Ask, overwrite, or keep both copies |
 | Chat apps only | Ignore copies made outside recognised chat apps |
+| Privacy exclusions | Exclude selected assistant apps from capture |
+| Hide code previews | Hide filenames and details in capture notifications |
 | Minimum length | Skip short snippets like one-liners |
 | Default project | Where captures go when you have not picked a project |
 | Floating bubble | Show the overlay bubble and set its position |

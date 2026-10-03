@@ -39,11 +39,14 @@ enum class VibeTab(val label: String) {
     NEW("New"),
     SETTINGS("Settings"),
 }
+private data class SharedImportEvent(val token: Long, val text: String)
+
 
 class MainActivity : ComponentActivity() {
 
     private var pendingCaptureId by mutableStateOf<String?>(null)
 
+    private var pendingImport by mutableStateOf<SharedImportEvent?>(null)
     private val requestNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             CaptureNotifier.ensureChannels(this)
@@ -58,7 +61,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             VibeCollectorTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    VibeRoot(pendingCaptureId = pendingCaptureId, onCaptureConsumed = { pendingCaptureId = null })
+                    VibeRoot(
+                        pendingCaptureId = pendingCaptureId,
+                        pendingImport = pendingImport,
+                        onCaptureConsumed = { pendingCaptureId = null },
+                        onImportConsumed = { pendingImport = null },
+                    )
                 }
             }
         }
@@ -73,6 +81,16 @@ class MainActivity : ComponentActivity() {
     private fun consumeIntent(intent: Intent?) {
         if (intent?.action == ACTION_OPEN_CAPTURE) {
             pendingCaptureId = intent.getStringExtra(EXTRA_CAPTURE_ID)
+            return
+        }
+        val text = when (intent?.action) {
+            Intent.ACTION_SEND -> intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+                ?: intent.clipData?.getItemAt(0)?.text?.toString()
+            Intent.ACTION_PROCESS_TEXT -> intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            else -> null
+        }
+        if (!text.isNullOrBlank()) {
+            pendingImport = SharedImportEvent(System.nanoTime(), text)
         }
     }
 
@@ -90,7 +108,12 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun VibeRoot(pendingCaptureId: String?, onCaptureConsumed: () -> Unit) {
+private fun VibeRoot(
+    pendingCaptureId: String?,
+    pendingImport: SharedImportEvent?,
+    onCaptureConsumed: () -> Unit,
+    onImportConsumed: () -> Unit,
+) {
     val vm: VibeViewModel = viewModel()
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -105,6 +128,15 @@ private fun VibeRoot(pendingCaptureId: String?, onCaptureConsumed: () -> Unit) {
             onCaptureConsumed()
         }
     }
+    LaunchedEffect(pendingImport?.token) {
+        val shared = pendingImport
+        if (shared != null) {
+            tab = VibeTab.INBOX
+            vm.importText(shared.text)
+            onImportConsumed()
+        }
+    }
+
 
     LaunchedEffect(state.message) {
         state.message?.let {

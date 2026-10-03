@@ -63,6 +63,13 @@ data class WriteOutcome(
     val written: List<String>,
     val skipped: List<String>,
     val error: String? = null,
+    val conflicts: List<String> = emptyList(),
 ) {
-    val ok: Boolean get() = error == null && written.isNotEmpty()
+    val ok: Boolean get() = error == null && conflicts.isEmpty() && written.isNotEmpty()
+}
+
+enum class ExistingFilePolicy {
+    ASK,
+    KEEP_BOTH,
+    OVERWRITE,
 }

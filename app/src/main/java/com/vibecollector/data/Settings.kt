@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -36,9 +37,14 @@ data class VibeSettings(
     val apiKey: String = "",
     val apiModel: String = "deepseek-chat",
     val apiBase: String = "https://api.deepseek.com/v1",
+    val excludedPackages: Set<String> = emptySet(),
+    val hideNotificationPreview: Boolean = false,
+    val pauseUntilMillis: Long = 0,
+    val existingFilePolicy: ExistingFilePolicy = ExistingFilePolicy.ASK,
 ) {
     val hasApiKey: Boolean get() = apiKey.isNotBlank()
     /** True when a capture should be written to disk without asking. */
+    val capturePaused: Boolean get() = pauseUntilMillis > System.currentTimeMillis()
     val savesWithoutAsking: Boolean get() = captureEnabled && autoSaveAll
 }
 
@@ -58,6 +64,10 @@ class SettingsStore(private val context: Context) {
         val BUBBLE_EDGE = stringPreferencesKey("bubble_edge")
         val API_KEY = stringPreferencesKey("api_key")
         val API_MODEL = stringPreferencesKey("api_model")
+        val EXCLUDED_PACKAGES = stringPreferencesKey("excluded_packages")
+        val HIDE_PREVIEW = booleanPreferencesKey("hide_notification_preview")
+        val PAUSE_UNTIL = longPreferencesKey("pause_until_millis")
+        val EXISTING_FILE_POLICY = stringPreferencesKey("existing_file_policy")
         val API_BASE = stringPreferencesKey("api_base")
     }
 
@@ -76,6 +86,10 @@ class SettingsStore(private val context: Context) {
             bubbleEdge = p[Keys.BUBBLE_EDGE] ?: "right",
             apiKey = p[Keys.API_KEY] ?: "",
             apiModel = p[Keys.API_MODEL] ?: "deepseek-chat",
+            excludedPackages = p[Keys.EXCLUDED_PACKAGES]?.split(',')?.filter(String::isNotBlank)?.toSet() ?: emptySet(),
+            hideNotificationPreview = p[Keys.HIDE_PREVIEW] ?: false,
+            pauseUntilMillis = p[Keys.PAUSE_UNTIL] ?: 0L,
+            existingFilePolicy = ExistingFilePolicy.values().firstOrNull { it.name == p[Keys.EXISTING_FILE_POLICY] } ?: ExistingFilePolicy.ASK,
             apiBase = p[Keys.API_BASE] ?: "https://api.deepseek.com/v1",
         )
     }
@@ -90,6 +104,10 @@ class SettingsStore(private val context: Context) {
     suspend fun setDefaultProject(v: String) = put(Keys.DEFAULT_PROJECT, v)
     suspend fun setApiKey(v: String) = put(Keys.API_KEY, v.trim())
     suspend fun setApiModel(v: String) = put(Keys.API_MODEL, v.trim())
+    suspend fun setExcludedPackages(v: Set<String>) = put(Keys.EXCLUDED_PACKAGES, v.sorted().joinToString(","))
+    suspend fun setHideNotificationPreview(v: Boolean) = put(Keys.HIDE_PREVIEW, v)
+    suspend fun setPauseUntil(v: Long) = put(Keys.PAUSE_UNTIL, v.coerceAtLeast(0L))
+    suspend fun setExistingFilePolicy(v: ExistingFilePolicy) = put(Keys.EXISTING_FILE_POLICY, v.name)
     suspend fun setApiBase(v: String) = put(Keys.API_BASE, v.trim().trimEnd('/'))
     suspend fun setBubblePosition(x: Int, y: Int) {
         context.dataStore.edit {

@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import com.vibecollector.data.CapturedFile
 import com.vibecollector.data.FileNode
 import com.vibecollector.data.Project
+import com.vibecollector.data.ExistingFilePolicy
 import com.vibecollector.data.WriteOutcome
 import com.vibecollector.parse.ScaffoldEntry
 import java.io.File
@@ -161,6 +162,14 @@ class ProjectStore(context: Context) {
         if (to.exists()) return false
         return runCatching { from.renameTo(to) }.getOrDefault(false)
     }
+    fun move(project: String, relativePath: String, destinationDirectory: String): Boolean {
+        val from = resolve(project, relativePath) ?: return false
+        val destination = resolve(project, destinationDirectory) ?: return false
+        if (!from.exists() || !destination.isDirectory || from == destination) return false
+        val target = File(destination, from.name)
+        if (target.exists() || !isInside(target, projectDir(project) ?: return false)) return false
+        return runCatching { from.renameTo(target) }.getOrDefault(false)
+    }
 
     fun delete(project: String, relativePath: String): Boolean {
         val target = resolve(project, relativePath) ?: return false
@@ -234,27 +243,60 @@ class ProjectStore(context: Context) {
      * Write a confirmed capture. Files whose path cannot be resolved safely are
      * reported in [WriteOutcome.skipped] rather than written somewhere unexpected.
      */
-    fun writeCapture(project: String, files: List<CapturedFile>): WriteOutcome {
+    fun writeCapture(
+        project: String,
+        files: List<CapturedFile>,
+        policy: ExistingFilePolicy = ExistingFilePolicy.ASK,
+    ): WriteOutcome {
         val dir = projectDir(project) ?: return WriteOutcome(emptyList(), files.map { it.path }, "invalid project name")
         if (!dir.exists() && !runCatching { dir.mkdirs() }.getOrDefault(false)) {
             return WriteOutcome(emptyList(), files.map { it.path }, "could not create project folder")
         }
+        val conflicts = files.map { it.path }.filter { path -> resolve(project, path)?.exists() == true }.distinct()
+        if (policy == ExistingFilePolicy.ASK && conflicts.isNotEmpty()) {
+            return WriteOutcome(emptyList(), emptyList(), conflicts = conflicts)
+        }
         val written = mutableListOf<String>()
         val skipped = mutableListOf<String>()
-        for (f in files) {
-            val target = resolve(project, f.path)
+        val reserved = mutableSetOf<String>()
+        for (file in files) {
+            val selectedPath = if (policy == ExistingFilePolicy.KEEP_BOTH) uniquePath(project, file.path, reserved) else file.path
+            val target = resolve(project, selectedPath)
             if (target == null || target.isDirectory) {
-                skipped += f.path
+                skipped += file.path
                 continue
             }
             val ok = runCatching {
                 target.parentFile?.mkdirs()
-                FileOutputStream(target).use { it.write(f.content.toByteArray(Charsets.UTF_8)) }
+                FileOutputStream(target).use { it.write(file.content.toByteArray(Charsets.UTF_8)) }
                 true
             }.getOrDefault(false)
-            if (ok) written += f.path else skipped += f.path
+            if (ok) {
+                written += selectedPath
+                reserved += selectedPath
+            } else {
+                skipped += file.path
+            }
         }
         return WriteOutcome(written, skipped, null)
+    }
+
+    private fun uniquePath(project: String, path: String, reserved: Set<String>): String {
+        val file = resolve(project, path) ?: return path
+        if (!file.exists() && path !in reserved) return path
+        val parent = path.substringBeforeLast('/', "")
+        val name = path.substringAfterLast('/')
+        val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
+        val stem = name.substring(0, dot)
+        val extension = name.substring(dot)
+        var index = 2
+        while (true) {
+            val candidateName = "$stem ($index)$extension"
+            val candidate = if (parent.isBlank()) candidateName else "$parent/$candidateName"
+            val resolved = resolve(project, candidate)
+            if (resolved != null && !resolved.exists() && candidate !in reserved) return candidate
+            index++
+        }
     }
 
     /** Keep a log of what was collected, newest first, at the project root. */

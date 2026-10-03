@@ -82,6 +82,9 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
     var showExport by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<FileNode?>(null) }
     var renameTarget by remember { mutableStateOf<FileNode?>(null) }
+    var moveTarget by remember { mutableStateOf<FileNode?>(null) }
+    var movePath by remember { mutableStateOf("") }
+    var searchQuery by remember(browse.project, browse.path) { mutableStateOf("") }
 
     LaunchedEffect(browse.project) { vm.refreshProjects() }
 
@@ -149,18 +152,31 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
                 onSelect = { vm.openProject(it, "") },
             )
 
+            if (browse.project.isNotBlank()) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text("Search this folder") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+
             if (browse.project.isBlank()) {
                 EmptyHint("Create a project to start collecting code into it.")
                 return@Column
             }
 
-            if (browse.nodes.isEmpty() && !browse.loading) {
-                EmptyHint("This folder is empty.\nCopy some code from a chatbot and it will show up here.")
+            val visibleNodes = browse.nodes.filter {
+                it.name.contains(searchQuery, ignoreCase = true) || it.path.contains(searchQuery, ignoreCase = true)
+            }
+            if (visibleNodes.isEmpty() && !browse.loading) {
+                EmptyHint(if (searchQuery.isBlank()) "This folder is empty.\nCopy some code from a chatbot and it will show up here." else "No files match ‘$searchQuery’ in this folder.")
                 return@Column
             }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(browse.nodes, key = { it.path }) { node ->
+                items(visibleNodes, key = { it.path }) { node ->
                     FileRow(
                         node = node,
                         contextTime = { formatTime(context, node.modifiedAt) },
@@ -169,6 +185,7 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
                             if (node.isDirectory) vm.navigateTo(node) else vm.openFile(node)
                         },
                         onRename = { renameTarget = node },
+                        onMove = { moveTarget = node; movePath = "" },
                         onDelete = { pendingDelete = node },
                     )
                     HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
@@ -234,6 +251,28 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
         )
     }
 
+    moveTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { moveTarget = null },
+            title = { Text("Move ${target.name}") },
+            text = {
+                OutlinedTextField(
+                    value = movePath,
+                    onValueChange = { movePath = it },
+                    label = { Text("Destination folder path") },
+                    placeholder = { Text("src/main") },
+                    supportingText = { Text("Use a project-relative path; leave blank for the project root.") },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.moveNode(target, movePath.trim().trim('/')); moveTarget = null }) {
+                    Text("Move")
+                }
+            },
+            dismissButton = { TextButton(onClick = { moveTarget = null }) { Text("Cancel") } },
+        )
+    }
+
     pendingDelete?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
@@ -254,6 +293,7 @@ private fun FileRow(
     size: () -> String,
     onClick: () -> Unit,
     onRename: () -> Unit,
+    onMove: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -295,6 +335,7 @@ private fun FileRow(
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; onRename() })
+                DropdownMenuItem(text = { Text("Move") }, onClick = { menuOpen = false; onMove() })
                 if (node.isDirectory) {
                     DropdownMenuItem(
                         text = { Text("Delete") },

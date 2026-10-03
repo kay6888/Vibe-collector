@@ -7,6 +7,7 @@ import android.widget.Toast
 import com.vibecollector.Vibe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -36,32 +37,38 @@ class CaptureActionReceiver : BroadcastReceiver() {
                     return
                 }
                 pendingScope.launch {
-                    val report = coordinator.save(id)
+                    val settings = vibe.settings.flow.first()
+                    val report = coordinator.save(id, conflictPolicy = settings.existingFilePolicy)
                     withMain {
-                        CaptureNotifier.showResult(
-                            context,
-                            if (report.ok) "Saved" else "Could not save",
-                            report.summary,
-                        )
+                        if (report.ok) CaptureNotifier.clearCapturePrompt(context, id)
+                        if (report.conflicts.isNotEmpty()) openCapture(context, id)
+                        else CaptureNotifier.showResult(context, if (report.ok) "Saved" else "Could not save", report.summary)
                     }
                 }
             }
 
             ACTION_DISCARD -> {
                 coordinator.remove(id)
+                CaptureNotifier.clearCapturePrompt(context, id)
                 CaptureNotifier.showResult(context, "Discarded", "The capture was not written to disk.")
             }
 
             ACTION_SAVE_ALL -> {
                 pendingScope.launch {
-                    val reports = coordinator.saveAll()
+                    val captures = coordinator.list()
+                    val settings = vibe.settings.flow.first()
+                    val reports = coordinator.saveAll(settings.existingFilePolicy)
                     withMain {
                         val ok = reports.count { it.ok }
-                        CaptureNotifier.showResult(
-                            context,
-                            "Saved $ok capture${if (ok == 1) "" else "s"}",
-                            reports.joinToString("\n") { it.summary },
-                        )
+                        val remainingIds = coordinator.list().map { it.id }.toSet()
+                        captures.filterNot { it.id in remainingIds }.forEach { CaptureNotifier.clearCapturePrompt(context, it.id) }
+                        val conflict = reports.firstOrNull { it.conflicts.isNotEmpty() }
+                        if (conflict != null) {
+                            captures.getOrNull(reports.indexOfFirst { it.conflicts.isNotEmpty() })
+                                ?.let { openCapture(context, it.id) }
+                        } else {
+                            CaptureNotifier.showResult(context, "Saved $ok capture${if (ok == 1) "" else "s"}", reports.joinToString("\n") { it.summary })
+                        }
                     }
                 }
             }

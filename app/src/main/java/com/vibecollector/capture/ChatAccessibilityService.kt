@@ -15,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
 
 /**
  * The capture engine.
@@ -43,6 +44,10 @@ class ChatAccessibilityService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
     private var clipboard: ClipboardManager? = null
     private var lastForegroundPackage: String? = null
+    private val copyLock = Any()
+    private var lastClipboardDigest: String? = null
+    private var lastClipboardSource: String? = null
+    private var lastClipboardAt = 0L
 
     private val listener = ClipboardManager.OnPrimaryClipChangedListener { onClipboardChanged() }
 
@@ -55,8 +60,6 @@ class ChatAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         val app = Vibe.get().app
         runCatching { clipboard?.addPrimaryClipChangedListener(listener) }
-        // Read on connect so a copy made just before the service bound is not missed.
-        main.postDelayed({ readClipboardNow() }, 500)
         CaptureNotifier.ensureChannels(app)
         Vibe.markServiceRunning(true)
     }
@@ -117,6 +120,7 @@ class ChatAccessibilityService : AccessibilityService() {
     private fun handleText(text: String) {
         val vibe = Vibe.get()
         val source = lastForegroundPackage
+        if (isDuplicateCopy(text, source)) return
         scope.launch {
             val settings = vibe.settings.flow.first()
             if (!settings.captureEnabled) return@launch
@@ -151,8 +155,23 @@ class ChatAccessibilityService : AccessibilityService() {
                 return@launch
             }
 
-            if (settings.savesWithoutAsking) {
-                val report = vibe.captureCoordinator.save(capture.id, capture.files)
+            if (settings.savesWithoutAsking && !capture.hasUnnamed) {
+                vibe.captureCoordinator.enqueue(capture)
+                val report = vibe.captureCoordinator.save(
+                    capture.id,
+                    capture.files,
+                    settings.existingFilePolicy,
+                )
+                if (!report.ok) {
+                    main.post {
+                        if (settings.notificationsEnabled) {
+                            CaptureNotifier.showCapturePrompt(vibe.app, capture, settings)
+                        } else {
+                            Vibe.setBadgeCount(vibe.captureCoordinator.count())
+                        }
+                    }
+                    return@launch
+                }
                 main.post {
                     CaptureNotifier.showResult(
                         vibe.app,
@@ -173,6 +192,23 @@ class ChatAccessibilityService : AccessibilityService() {
             }
         }
     }
+    private fun isDuplicateCopy(text: String, source: String?): Boolean {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val now = System.currentTimeMillis()
+        synchronized(copyLock) {
+            val duplicate = digest == lastClipboardDigest &&
+                source == lastClipboardSource && now - lastClipboardAt < 2500
+            if (!duplicate) {
+                lastClipboardDigest = digest
+                lastClipboardSource = source
+                lastClipboardAt = now
+            }
+            return duplicate
+        }
+    }
+
 
     private fun labelFor(pkg: String?): String {
         if (pkg.isNullOrBlank() || pkg == Vibe.get().app.packageName) return "clipboard"

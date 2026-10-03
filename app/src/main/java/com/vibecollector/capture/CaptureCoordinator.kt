@@ -2,6 +2,7 @@ package com.vibecollector.capture
 
 import android.content.Context
 import com.vibecollector.data.CapturedFile
+import com.vibecollector.data.ExistingFilePolicy
 import com.vibecollector.data.PendingCapture
 import com.vibecollector.data.VibeSettings
 import com.vibecollector.parse.CodeBlockParser
@@ -144,16 +145,26 @@ class CaptureCoordinator(
         }
     }
 
-    suspend fun save(id: String, overrideFiles: List<CapturedFile>? = null): SaveReport =
+    suspend fun save(
+        id: String,
+        overrideFiles: List<CapturedFile>? = null,
+        conflictPolicy: ExistingFilePolicy = ExistingFilePolicy.ASK,
+    ): SaveReport =
         withContext(Dispatchers.IO) {
             val capture = find(id) ?: return@withContext SaveReport(false, "capture expired")
             val project = capture.project.ifBlank { suggestProjectName() }
             val files = overrideFiles ?: capture.files
+            if (files.any { it.needsNameConfirm }) {
+                return@withContext SaveReport(false, "Confirm guessed filenames before saving", project)
+            }
             if (files.isEmpty()) {
                 remove(id)
                 return@withContext SaveReport(true, "Structure created in $project", project, emptyList())
             }
-            val outcome = store.writeCapture(project, files)
+            val outcome = store.writeCapture(project, files, conflictPolicy)
+            if (outcome.conflicts.isNotEmpty()) {
+                return@withContext SaveReport(false, "Files already exist in $project", project, conflicts = outcome.conflicts)
+            }
             if (outcome.error != null) {
                 SaveReport(false, outcome.error, project, emptyList())
             } else {
@@ -164,8 +175,8 @@ class CaptureCoordinator(
         }
 
     /** Save every pending capture at once — the "yes to all" button. */
-    suspend fun saveAll(): List<SaveReport> = withContext(Dispatchers.IO) {
-        list().map { save(it.id) }
+    suspend fun saveAll(conflictPolicy: ExistingFilePolicy = ExistingFilePolicy.ASK): List<SaveReport> = withContext(Dispatchers.IO) {
+        list().map { save(it.id, conflictPolicy = conflictPolicy) }
     }
 
     suspend fun discardAll() = withContext(Dispatchers.IO) { clear() }
@@ -186,6 +197,7 @@ data class SaveReport(
     val error: String? = null,
     val project: String = "",
     val written: List<String> = emptyList(),
+    val conflicts: List<String> = emptyList(),
 ) {
     val summary: String
         get() = when {

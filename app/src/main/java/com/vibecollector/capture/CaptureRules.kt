@@ -54,6 +54,7 @@ object CaptureRules {
         ownPackages: Set<String> = emptySet(),
     ): Verdict {
         if (!settings.captureEnabled) return Verdict(false, "capture is off")
+        if (settings.capturePaused) return Verdict(false, "capture is paused")
         if (!settings.copyCollectEnabled) return Verdict(false, "copy collect is off")
 
         val trimmed = text.trim()
@@ -63,6 +64,9 @@ object CaptureRules {
         // Never react to the user copying out of vibe-collector itself.
         if (sourcePackage != null && sourcePackage in ownPackages) {
             return Verdict(false, "copied from vibe-collector")
+        }
+        if (sourcePackage != null && sourcePackage in settings.excludedPackages) {
+            return Verdict(false, "$sourcePackage is excluded")
         }
 
         if (settings.chatAppsOnly) {

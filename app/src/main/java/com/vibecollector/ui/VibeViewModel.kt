@@ -9,11 +9,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vibecollector.Vibe
 import com.vibecollector.ai.AiStructureClient
+import com.vibecollector.capture.CaptureRules
 import com.vibecollector.data.CapturedFile
+import com.vibecollector.data.ExistingFilePolicy
 import com.vibecollector.data.FileNode
 import com.vibecollector.data.PendingCapture
 import com.vibecollector.data.Project
 import com.vibecollector.data.VibeSettings
+import com.vibecollector.notify.CaptureNotifier
 import com.vibecollector.parse.ScaffoldEntry
 import com.vibecollector.parse.TreeParser
 import com.vibecollector.storage.ProjectStore
@@ -21,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,6 +46,8 @@ data class UiState(
     val message: String? = null,
     val busy: Boolean = false,
     val aiBusy: Boolean = false,
+    val conflictCaptureId: String? = null,
+    val conflictPaths: List<String> = emptyList(),
     val aiError: String? = null,
 )
 
@@ -118,36 +124,59 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openCapture(id: String?) = _state.update { it.copy(openCaptureId = id) }
 
-    fun saveCapture(id: String, files: List<CapturedFile>? = null, project: String? = null) =
-        viewModelScope.launch {
-            project?.let { chosen ->
-                val existing = Vibe.app.captureCoordinator.find(id)
-                if (existing != null) {
-                    Vibe.app.captureCoordinator.enqueue(existing.copy(project = chosen))
-                }
-            }
-            _state.update { it.copy(busy = true) }
-            val report = Vibe.app.captureCoordinator.save(id, files)
-            _state.update {
-                it.copy(busy = false, message = report.summary, openCaptureId = null)
-            }
-            refreshPending()
-            refreshProjects()
+    fun saveCapture(
+        id: String,
+        files: List<CapturedFile>? = null,
+        project: String? = null,
+        conflictPolicy: ExistingFilePolicy? = null,
+    ) = viewModelScope.launch {
+        project?.let { chosen ->
+            val existing = Vibe.app.captureCoordinator.find(id)
+            if (existing != null) Vibe.app.captureCoordinator.enqueue(existing.copy(project = chosen))
         }
+        _state.update { it.copy(busy = true) }
+        val policy = conflictPolicy ?: _state.value.settings.existingFilePolicy
+        val report = Vibe.app.captureCoordinator.save(id, files, policy)
+        if (report.ok) CaptureNotifier.clearCapturePrompt(getApplication(), id)
+        _state.update { state ->
+            if (report.conflicts.isNotEmpty()) {
+                state.copy(busy = false, conflictCaptureId = id, conflictPaths = report.conflicts, openCaptureId = id)
+            } else {
+                state.copy(
+                    busy = false,
+                    message = report.summary,
+                    openCaptureId = null,
+                    conflictCaptureId = null,
+                    conflictPaths = emptyList(),
+                )
+            }
+        }
+        refreshPending()
+        refreshProjects()
+    }
 
     fun discardCapture(id: String) = viewModelScope.launch(Dispatchers.IO) {
         Vibe.app.captureCoordinator.remove(id)
+        CaptureNotifier.clearCapturePrompt(getApplication(), id)
         _state.update { it.copy(message = "Discarded", openCaptureId = null) }
         refreshPending()
     }
 
     fun saveAllPending() = viewModelScope.launch {
         _state.update { it.copy(busy = true) }
-        val reports = Vibe.app.captureCoordinator.saveAll()
+        val captures = Vibe.app.captureCoordinator.list()
+        val reports = captures.map { capture ->
+            Vibe.app.captureCoordinator.save(capture.id, conflictPolicy = _state.value.settings.existingFilePolicy)
+        }
+        reports.forEachIndexed { index, report -> if (report.ok) CaptureNotifier.clearCapturePrompt(getApplication(), captures[index].id) }
+        val conflictIndex = reports.indexOfFirst { it.conflicts.isNotEmpty() }
+        val conflictCapture = captures.getOrNull(conflictIndex)
         _state.update {
             it.copy(
                 busy = false,
                 message = "Saved ${reports.count { r -> r.ok }} capture${if (reports.count { r -> r.ok } == 1) "" else "s"}",
+                conflictCaptureId = conflictCapture?.id,
+                conflictPaths = reports.getOrNull(conflictIndex)?.conflicts.orEmpty(),
             )
         }
         refreshPending()
@@ -155,6 +184,7 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun discardAllPending() = viewModelScope.launch(Dispatchers.IO) {
+        Vibe.app.captureCoordinator.list().forEach { CaptureNotifier.clearCapturePrompt(getApplication(), it.id) }
         Vibe.app.captureCoordinator.clear()
         _state.update { it.copy(message = "Inbox cleared") }
         refreshPending()
@@ -215,6 +245,13 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
         openProject(b.project, b.path)
     }
 
+    fun moveNode(node: FileNode, destinationDirectory: String) = viewModelScope.launch(Dispatchers.IO) {
+        val b = _state.value.browse
+        val ok = store.move(b.project, node.path, destinationDirectory)
+        _state.update { it.copy(message = if (ok) "Moved ${node.name}" else "Move failed; destination must exist and be empty") }
+        openProject(b.project, b.path)
+    }
+
     fun deleteNode(node: FileNode) = viewModelScope.launch(Dispatchers.IO) {
         val b = _state.value.browse
         val ok = store.delete(b.project, node.path)
@@ -251,6 +288,49 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun readLog(): String = store.readCaptureLog(_state.value.browse.project)
+
+    fun importText(text: String, sourceLabel: String = "Shared text") = viewModelScope.launch(Dispatchers.IO) {
+        val settings = settingsStore.flow.first()
+        val importSettings = settings.copy(
+            captureEnabled = true,
+            copyCollectEnabled = true,
+            chatAppsOnly = false,
+            pauseUntilMillis = 0,
+            excludedPackages = emptySet(),
+        )
+        val verdict = CaptureRules.evaluate(text, importSettings, null)
+        if (!verdict.capture) {
+            _state.update { it.copy(message = "No code detected: ${verdict.reason}") }
+            return@launch
+        }
+        val capture = Vibe.app.captureCoordinator.build(text, settings, "", sourceLabel)
+        if (capture == null) {
+            _state.update { it.copy(message = "Could not import this text") }
+            return@launch
+        }
+        if (capture.isScaffoldOnly) {
+            _state.update { it.copy(message = "Project structure created in ${capture.project}") }
+            refreshProjects()
+            return@launch
+        }
+        Vibe.app.captureCoordinator.enqueue(capture)
+        if (settings.savesWithoutAsking && !capture.hasUnnamed) {
+            val report = Vibe.app.captureCoordinator.save(capture.id, conflictPolicy = settings.existingFilePolicy)
+            _state.update {
+                it.copy(
+                    message = report.summary,
+                    conflictCaptureId = capture.id.takeIf { report.conflicts.isNotEmpty() },
+                    conflictPaths = report.conflicts,
+                )
+            }
+            if (!report.ok && settings.notificationsEnabled) CaptureNotifier.showCapturePrompt(getApplication(), capture, settings)
+        } else {
+            _state.update { it.copy(message = "Imported to Inbox for review") }
+            if (settings.notificationsEnabled) CaptureNotifier.showCapturePrompt(getApplication(), capture, settings)
+        }
+        refreshPending()
+        refreshProjects()
+    }
 
     // ---------------------------------------------------------------- scaffold
 
@@ -292,7 +372,10 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setCaptureEnabled(v: Boolean) = viewModelScope.launch { settingsStore.setCaptureEnabled(v) }
     fun setCopyCollect(v: Boolean) = viewModelScope.launch { settingsStore.setCopyCollect(v) }
-    fun setNotifications(v: Boolean) = viewModelScope.launch { settingsStore.setNotifications(v) }
+    fun setNotifications(v: Boolean) = viewModelScope.launch {
+        settingsStore.setNotifications(v)
+        if (!v) CaptureNotifier.clearCaptureNotifications(getApplication())
+    }
     fun setAutoSaveAll(v: Boolean) = viewModelScope.launch { settingsStore.setAutoSaveAll(v) }
     fun setChatAppsOnly(v: Boolean) = viewModelScope.launch { settingsStore.setChatAppsOnly(v) }
     fun setMinChars(v: Int) = viewModelScope.launch { settingsStore.setMinChars(v) }
@@ -301,6 +384,16 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
     fun setApiModel(v: String) = viewModelScope.launch { settingsStore.setApiModel(v) }
     fun setApiBase(v: String) = viewModelScope.launch { settingsStore.setApiBase(v) }
     fun setBubbleEnabled(v: Boolean) = viewModelScope.launch { settingsStore.setBubbleEnabled(v) }
+    fun setPauseUntil(v: Long) = viewModelScope.launch { settingsStore.setPauseUntil(v) }
+    fun setHideNotificationPreview(v: Boolean) = viewModelScope.launch { settingsStore.setHideNotificationPreview(v) }
+    fun setExistingFilePolicy(v: ExistingFilePolicy) = viewModelScope.launch { settingsStore.setExistingFilePolicy(v) }
+    fun setExcludedPackage(packageName: String, excluded: Boolean) = viewModelScope.launch {
+        val packages = _state.value.settings.excludedPackages.toMutableSet()
+        if (excluded) packages += packageName else packages -= packageName
+        settingsStore.setExcludedPackages(packages)
+    }
+
+    fun clearConflict() = _state.update { it.copy(conflictCaptureId = null, conflictPaths = emptyList()) }
 
     // ---------------------------------------------------------------- helpers
 

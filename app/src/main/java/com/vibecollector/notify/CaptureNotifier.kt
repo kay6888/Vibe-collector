@@ -4,16 +4,22 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.vibecollector.MainActivity
 import com.vibecollector.R
 import com.vibecollector.Vibe
 import com.vibecollector.data.PendingCapture
 import com.vibecollector.data.VibeSettings
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * System notifications for captures.
@@ -26,8 +32,11 @@ object CaptureNotifier {
     const val CHANNEL_CAPTURE = "vibe_capture"
     const val CHANNEL_SERVICE = "vibe_service"
 
-    /** Bumped whenever the per-capture notification should replace the previous one. */
-    private const val BASE_ID = 4200
+    private const val RESULT_ID = 4201
+    private const val CAPTURE_TAG = "vibe-capture:"
+    private const val RESULT_TAG = "vibe-capture-result"
+
+    private fun captureNotificationId(captureId: String): Int = (captureId.hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -56,9 +65,18 @@ object CaptureNotifier {
         }
     }
 
-    fun canPost(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            NotificationManagerCompat.from(context).areNotificationsEnabled()
+    fun canPost(context: Context): Boolean {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            context.getSystemService(NotificationManager::class.java)
+                ?.getNotificationChannel(CHANNEL_CAPTURE)?.importance != NotificationManager.IMPORTANCE_NONE
+    }
 
     /** Prompt the user to save a capture. Does nothing if notifications are off. */
     fun showCapturePrompt(context: Context, capture: PendingCapture, settings: VibeSettings) {
@@ -70,41 +88,41 @@ object CaptureNotifier {
             capture.id.hashCode(),
             Intent(context, MainActivity::class.java).apply {
                 action = MainActivity.ACTION_OPEN_CAPTURE
+                data = Uri.parse("vibe-collector://open-capture/${capture.id}")
                 putExtra(MainActivity.EXTRA_CAPTURE_ID, capture.id)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val save = actionIntent(context, CaptureActionReceiver.ACTION_SAVE, capture.id, 1)
-        val discard = actionIntent(context, CaptureActionReceiver.ACTION_DISCARD, capture.id, 2)
-        val saveAll = if (Vibe.get().captureCoordinator.count() > 1) {
+        val save = actionIntent(context, CaptureActionReceiver.ACTION_SAVE, capture.id, capture.id.hashCode() xor 0x51A7)
+        val discard = actionIntent(context, CaptureActionReceiver.ACTION_DISCARD, capture.id, capture.id.hashCode() xor 0xD15C)
+        val saveAll = if (Vibe.get().captureCoordinator.count() > 1 && Vibe.get().captureCoordinator.list().none { it.hasUnnamed }) {
             actionIntent(context, CaptureActionReceiver.ACTION_SAVE_ALL, "", 3)
         } else {
             null
         }
 
-        val content = when {
+        val content = if (settings.hideNotificationPreview) {
+            "${capture.fileCount} code file(s) ready"
+        } else when {
             capture.isScaffoldOnly -> "Created ${capture.scaffoldedDirs} folders and ${capture.scaffoldedFiles} files in ${capture.project}"
             capture.fileCount == 1 -> "${capture.files.first().path}  •  ${capture.files.first().lineCount} lines"
             else -> "${capture.fileCount} files  •  ${capture.sourceLabel.ifBlank { "clipboard" }}"
         }
 
-        val style = NotificationCompat.BigTextStyle().bigText(
-            buildString {
-                append(content)
-                append("\n\n")
-                capture.files.take(4).forEach { append("• ").append(it.path).append('\n') }
-                if (capture.files.size > 4) append("… and ${capture.files.size - 4} more")
-                if (capture.hasUnnamed) {
-                    append("\nSome filenames were guessed — tap to confirm before saving.")
-                }
-            }
-        )
+        val details = if (settings.hideNotificationPreview) content else buildString {
+            append(content)
+            append("\n\n")
+            capture.files.take(4).forEach { append("• ").append(it.path).append('\n') }
+            if (capture.files.size > 4) append("… and ${capture.files.size - 4} more")
+            if (capture.hasUnnamed) append("\nSome filenames were guessed — tap to confirm before saving.")
+        }
+        val style = NotificationCompat.BigTextStyle().bigText(details)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_CAPTURE)
             .setSmallIcon(R.drawable.ic_stat_vibe)
-            .setContentTitle("Save code from ${capture.sourceLabel.ifBlank { "clipboard" }}?")
+            .setContentTitle(if (settings.hideNotificationPreview) "Code capture ready" else "Save code from ${capture.sourceLabel.ifBlank { "clipboard" }}?")
             .setContentText(content)
             .setStyle(style)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -116,11 +134,20 @@ object CaptureNotifier {
             .also { if (saveAll != null) it.addAction(0, "Save all", saveAll) }
             .addAction(0, "Open", open)
 
-        post(context, BASE_ID, builder.build())
+        post(context, captureNotificationId(capture.id), builder.build(), CAPTURE_TAG + capture.id)
     }
 
     /** Confirmation after a save or discard. */
     fun showResult(context: Context, title: String, text: String) {
+        val appContext = context.applicationContext
+        Vibe.app.appScope.launch {
+            val settings = Vibe.settings.flow.first()
+            if (!settings.notificationsEnabled) return@launch
+            postResult(appContext, title, if (settings.hideNotificationPreview) "Capture action completed." else text)
+        }
+    }
+
+    private fun postResult(context: Context, title: String, text: String) {
         ensureChannels(context)
         val open = PendingIntent.getActivity(
             context,
@@ -139,11 +166,18 @@ object CaptureNotifier {
             .setAutoCancel(true)
             .setContentIntent(open)
             .build()
-        post(context, BASE_ID + 1, n)
+        post(context, RESULT_ID, n, RESULT_TAG)
     }
 
-    fun clearCapturePrompt(context: Context) {
-        NotificationManagerCompat.from(context).cancel(BASE_ID)
+    fun clearCapturePrompt(context: Context, captureId: String) {
+        NotificationManagerCompat.from(context).cancel(CAPTURE_TAG + captureId, captureNotificationId(captureId))
+    }
+
+    fun clearCaptureNotifications(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.activeNotifications
+            .filter { it.tag?.startsWith(CAPTURE_TAG) == true || it.tag == RESULT_TAG }
+            .forEach { manager.cancel(it.tag, it.id) }
     }
 
     fun serviceNotification(context: Context, text: String): Notification {
@@ -168,6 +202,7 @@ object CaptureNotifier {
         val intent = Intent(context, CaptureActionReceiver::class.java).apply {
             this.action = action
             putExtra(CaptureActionReceiver.EXTRA_ID, id)
+            data = Uri.parse("vibe-collector://capture/$id/$action")
         }
         return PendingIntent.getBroadcast(
             context,
@@ -177,8 +212,11 @@ object CaptureNotifier {
         )
     }
 
-    private fun post(context: Context, id: Int, notification: Notification) {
+    private fun post(context: Context, id: Int, notification: Notification, tag: String? = null) {
         if (!canPost(context)) return
-        runCatching { NotificationManagerCompat.from(context).notify(id, notification) }
+        runCatching {
+            if (tag == null) NotificationManagerCompat.from(context).notify(id, notification)
+            else NotificationManagerCompat.from(context).notify(tag, id, notification)
+        }
     }
 }

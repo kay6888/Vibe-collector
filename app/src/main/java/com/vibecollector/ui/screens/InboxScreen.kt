@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecollector.data.CapturedFile
+import com.vibecollector.data.ExistingFilePolicy
 import com.vibecollector.data.PendingCapture
 import com.vibecollector.ui.VibeViewModel
 
@@ -61,17 +62,19 @@ fun InboxScreen(vm: VibeViewModel, padding: PaddingValues, openCaptureId: String
     LaunchedEffect(Unit) { vm.refreshPending() }
 
     val open = state.pending.firstOrNull { it.id == openCaptureId }
+    var showImport by remember { mutableStateOf(false) }
+    var importText by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(bottom = padding.calculateBottomPadding())
     ) {
+        Button(onClick = { showImport = true }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text("Paste or import code")
+        }
         if (state.pending.isEmpty()) {
-            EmptyHint(
-                "Nothing waiting.\nCopy code from a chatbot and it will appear here, " +
-                    "or as a notification asking whether to keep it.",
-            )
+            EmptyHint("Nothing waiting. Share code to vibe-collector or paste it here without Accessibility.")
             return@Column
         }
 
@@ -110,6 +113,54 @@ fun InboxScreen(vm: VibeViewModel, padding: PaddingValues, openCaptureId: String
     if (open != null) {
         CaptureDetailSheet(vm = vm, capture = open)
     }
+    if (showImport) {
+        AlertDialog(
+            onDismissRequest = { showImport = false },
+            title = { Text("Import code") },
+            text = {
+                OutlinedTextField(
+                    value = importText,
+                    onValueChange = { importText = it },
+                    label = { Text("Paste chatbot text or code") },
+                    minLines = 6,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { vm.importText(importText, "Manual paste"); showImport = false },
+                    enabled = importText.isNotBlank(),
+                ) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = { showImport = false }) { Text("Cancel") } },
+        )
+    }
+
+    state.conflictCaptureId?.let { captureId ->
+        AlertDialog(
+            onDismissRequest = vm::clearConflict,
+            title = { Text("Files already exist") },
+            text = {
+                Column {
+                    Text("Choose whether to replace these files or keep a second copy:")
+                    state.conflictPaths.take(6).forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.saveCapture(captureId, conflictPolicy = ExistingFilePolicy.OVERWRITE)
+                }) { Text("Overwrite") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        vm.saveCapture(captureId, conflictPolicy = ExistingFilePolicy.KEEP_BOTH)
+                    }) { Text("Keep both") }
+                    TextButton(onClick = vm::clearConflict) { Text("Cancel") }
+                }
+            },
+        )
+    }
+
 }
 
 @Composable
@@ -225,6 +276,7 @@ private fun CaptureDetailSheet(vm: VibeViewModel, capture: PendingCapture) {
                     onClick = {
                         vm.saveCapture(effective.id, project = project.ifBlank { null })
                     },
+                    enabled = !effective.hasUnnamed,
                     modifier = Modifier.weight(1f),
                 ) { Text("Save ${effective.files.size} file(s)") }
                 OutlinedButton(onClick = { confirmDiscard = true }) {

@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -44,6 +46,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecollector.capture.CaptureRules
+import com.vibecollector.data.ExistingFilePolicy
+import com.vibecollector.notify.CaptureNotifier
 import com.vibecollector.overlay.BubbleService
 import com.vibecollector.ui.VibeViewModel
 import com.vibecollector.ui.components.SectionHeader
@@ -81,8 +85,8 @@ fun SettingsScreen(vm: VibeViewModel, padding: PaddingValues) {
         PermissionCard(
             title = "Capture service",
             granted = serviceOn,
-            explanation = "Required. Android only lets the focused app and accessibility services read the " +
-                "clipboard, so this is how copied code is noticed at all.",
+            explanation = "Required for automatic clipboard monitoring. Share and paste/import still work without " +
+                "Accessibility access.",
             actionLabel = if (serviceOn) "Open settings" else "Enable",
             onAction = { vm.openAccessibilitySettings() },
         )
@@ -97,10 +101,10 @@ fun SettingsScreen(vm: VibeViewModel, padding: PaddingValues) {
         )
         Spacer(Modifier.height(8.dp))
         PermissionCard(
-            title = "Notifications",
-            granted = s.notificationsEnabled,
-            explanation = "Needed for the save-or-discard prompt. If you turn them off, captures still arrive " +
-                "and wait in the Inbox tab.",
+            title = "Android notification access",
+            granted = CaptureNotifier.canPost(context),
+            explanation = "Android permission for capture alerts. This is separate from the in-app Notifications " +
+                "switch; the monitoring service may keep its required status notification while active.",
             actionLabel = "Open settings",
             onAction = { vm.openNotificationSettings() },
         )
@@ -125,6 +129,19 @@ fun SettingsScreen(vm: VibeViewModel, padding: PaddingValues) {
             checked = s.chatAppsOnly,
             onChange = vm::setChatAppsOnly,
         )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(if (s.capturePaused) "Capture is paused" else "Pause capture", style = MaterialTheme.typography.bodyLarge)
+                Text("Pause clipboard monitoring for one hour.", style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(
+                onClick = { vm.setPauseUntil(if (s.capturePaused) 0L else System.currentTimeMillis() + 60 * 60 * 1000L) },
+            ) { Text(if (s.capturePaused) "Resume" else "Pause 1 hour") }
+        }
 
         Spacer(Modifier.height(12.dp))
         Text("Minimum length: $minChars characters", style = MaterialTheme.typography.bodyMedium)
@@ -143,15 +160,21 @@ fun SettingsScreen(vm: VibeViewModel, padding: PaddingValues) {
         SectionHeader("Being told")
         ToggleRow(
             title = "Notifications",
-            subtitle = "Show a notification for every code collected, with Save and Discard buttons.",
+            subtitle = "Show a Save or Discard prompt for each capture. Off keeps captures in the Inbox.",
             checked = s.notificationsEnabled,
             onChange = vm::setNotifications,
         )
         ToggleRow(
             title = "Yes to all",
-            subtitle = "Save captures immediately without asking. You can still discard from the capture log.",
+            subtitle = "Auto-save clearly named files. Guessed names and conflicts stay in the Inbox for review.",
             checked = s.autoSaveAll,
             onChange = vm::setAutoSaveAll,
+        )
+        ToggleRow(
+            title = "Hide code previews",
+            subtitle = "Notifications show capture counts instead of filenames and code details.",
+            checked = s.hideNotificationPreview,
+            onChange = vm::setHideNotificationPreview,
         )
         ToggleRow(
             title = "Floating button",
@@ -164,6 +187,37 @@ fun SettingsScreen(vm: VibeViewModel, padding: PaddingValues) {
         )
 
         SectionHeader("Where things go")
+        var policyMenu by remember { mutableStateOf(false) }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Files already exist", style = MaterialTheme.typography.bodyLarge)
+                Text("Choose how a save handles filename conflicts.", style = MaterialTheme.typography.bodySmall)
+            }
+            androidx.compose.foundation.layout.Box {
+                OutlinedButton(onClick = { policyMenu = true }) {
+                    Text(when (s.existingFilePolicy) {
+                        ExistingFilePolicy.ASK -> "Ask"
+                        ExistingFilePolicy.OVERWRITE -> "Overwrite"
+                        ExistingFilePolicy.KEEP_BOTH -> "Keep both"
+                    })
+                }
+                DropdownMenu(expanded = policyMenu, onDismissRequest = { policyMenu = false }) {
+                    ExistingFilePolicy.values().forEach { policy ->
+                        DropdownMenuItem(
+                            text = { Text(when (policy) {
+                                ExistingFilePolicy.ASK -> "Ask each time"
+                                ExistingFilePolicy.OVERWRITE -> "Overwrite existing"
+                                ExistingFilePolicy.KEEP_BOTH -> "Keep both copies"
+                            }) },
+                            onClick = { vm.setExistingFilePolicy(policy); policyMenu = false },
+                        )
+                    }
+                }
+            }
+        }
         OutlinedTextField(
             value = s.defaultProject,
             onValueChange = vm::setDefaultProject,
@@ -239,12 +293,20 @@ fun SettingsScreen(vm: VibeViewModel, padding: PaddingValues) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        SectionHeader("Recognised assistants")
+        SectionHeader("Privacy exclusions")
         Text(
-            CaptureRules.CHAT_PACKAGES.joinToString("\n") { "• $it" },
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            "Excluded assistants are never captured, even when chatbot-only capture is disabled.",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        CaptureRules.CHAT_PACKAGES.sorted().forEach { packageName ->
+            ToggleRow(
+                title = packageName,
+                subtitle = "Exclude this app from capture",
+                checked = packageName in s.excludedPackages,
+                onChange = { vm.setExcludedPackage(packageName, it) },
+            )
+        }
 
         SectionHeader("About")
         Text(
