@@ -90,7 +90,7 @@ only ever sent to the base URL you configure.
 
 ## Building
 
-Requires JDK 17 and an Android SDK with API 35.
+Requires JDK 17 and an Android SDK with API 34.
 
 ```bash
 ./gradlew testDebugUnitTest     # parser regression suite
@@ -100,6 +100,11 @@ Requires JDK 17 and an Android SDK with API 35.
 
 The release APK is unsigned. Add a `signingConfig` in `app/build.gradle.kts` with your
 own keystore to produce an installable release build.
+
+Room, KSP and WorkManager are declared as dependencies for upcoming features; the
+current storage layer uses plain files plus DataStore. The Gradle build could not be run
+in the environment where this change was prepared (Google's Maven repository was
+unreachable), so the CI workflow is the first real build of this configuration.
 
 ## CI
 
