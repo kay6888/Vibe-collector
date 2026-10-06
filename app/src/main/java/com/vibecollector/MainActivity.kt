@@ -72,6 +72,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        Vibe.appVisible = true
+        maybeAskForNotifications()
+    }
+
+    override fun onStop() {
+        Vibe.appVisible = false
+        super.onStop()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

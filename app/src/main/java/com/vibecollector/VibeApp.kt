@@ -60,6 +60,21 @@ object Vibe {
     var badgeCount: Int = 0
         private set
 
+    /** True while vibe-collector's own UI is on screen. */
+    @Volatile
+    var appVisible: Boolean = false
+
+    /** The last other app (usually an AI chatbot) the user was in, for the bubble to swap back to. */
+    @Volatile
+    var lastExternalPackage: String? = null
+
+    fun noteForeground(pkg: String) {
+        if (pkg == app.packageName || pkg.startsWith("com.android.systemui") ||
+            pkg.contains("inputmethod") || pkg.contains("launcher")
+        ) return
+        lastExternalPackage = pkg
+    }
+
     fun attach(application: VibeApp) {
         app = application
     }

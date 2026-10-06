@@ -130,13 +130,18 @@ class BubbleService : LifecycleService() {
         updateBadge()
     }
 
-    /** Long press dismisses, tap opens the app, matching platform expectations. */
+    /**
+     * Swap: from an AI app, jump to vibe-collector; from vibe-collector, jump back
+     * to the AI app the user came from.
+     */
     private fun onBubbleTapped() {
-        startActivity(
-            Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val last = Vibe.lastExternalPackage
+        val back = if (Vibe.appVisible && last != null) packageManager.getLaunchIntentForPackage(last) else null
+        val intent = back?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED) }
+            ?: Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             }
-        )
+        runCatching { startActivity(intent) }
     }
 
     private fun snapToEdge(wm: WindowManager, v: View, params: WindowManager.LayoutParams, size: Int) {

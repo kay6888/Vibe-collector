@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import com.vibecollector.data.CapturedFile
 import com.vibecollector.data.FileNode
+import com.vibecollector.data.FileStatus
 import com.vibecollector.data.Project
 import com.vibecollector.data.ExistingFilePolicy
 import com.vibecollector.data.WriteOutcome
@@ -103,20 +104,119 @@ class ProjectStore(context: Context) {
     fun listDir(project: String, relativePath: String = ""): List<FileNode> {
         val dir = resolve(project, relativePath) ?: return emptyList()
         if (!dir.isDirectory) return emptyList()
-        return dir.listFiles().orEmpty()
+        val expected = expectedFiles(project)
+        val nodes = dir.listFiles().orEmpty()
             .filter { !it.name.startsWith(".vibe") }
             .map { f ->
                 val isDir = f.isDirectory
+                val path = joinRelative(relativePath, f.name)
                 FileNode(
                     name = f.name,
-                    path = joinRelative(relativePath, f.name),
+                    path = path,
                     isDirectory = isDir,
                     sizeBytes = if (isDir) 0 else f.length(),
-                    childCount = if (isDir) f.list()?.size ?: 0 else 0,
+                    childCount = if (isDir) f.list()?.count { !it.startsWith(".vibe") } ?: 0 else 0,
                     modifiedAt = f.lastModified(),
+                    status = if (isDir) folderStatus(project, path, expected) else fileStatus(project, path, expected),
                 )
             }
+        // Files the structure promised but that are gone show up in red.
+        val prefix = if (relativePath.isBlank()) "" else "$relativePath/"
+        val present = nodes.map { it.name }.toSet()
+        val ghosts = mutableMapOf<String, FileNode>()
+        for (e in expected) {
+            if (!e.startsWith(prefix)) continue
+            val rest = e.removePrefix(prefix)
+            val head = rest.substringBefore('/')
+            if (head in present || head in ghosts) continue
+            val isDir = rest.contains('/')
+            val path = joinRelative(relativePath, head)
+            if (resolve(project, path)?.exists() == true) continue
+            ghosts[head] = FileNode(head, path, isDir, status = FileStatus.MISSING)
+        }
+        return (nodes + ghosts.values)
             .sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.name.lowercase() })
+    }
+
+    /** Colour status of any file or folder in a project. */
+    fun statusOf(project: String, relativePath: String): FileStatus {
+        val f = resolve(project, relativePath)
+        val expected = expectedFiles(project)
+        return if (f != null && f.isDirectory) folderStatus(project, relativePath, expected)
+        else fileStatus(project, relativePath, expected)
+    }
+
+    // ------------------------------------------------------------------ structure manifest
+
+    /** Project-relative file paths promised by the generated structure. */
+    fun expectedFiles(project: String): Set<String> {
+        val f = resolve(project, STRUCTURE_FILE) ?: return emptySet()
+        if (!f.isFile) return emptySet()
+        return runCatching { f.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet() }
+            .getOrDefault(emptySet())
+    }
+
+    private fun recordExpected(project: String, paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        val f = resolve(project, STRUCTURE_FILE) ?: return
+        runCatching { f.writeText((expectedFiles(project) + paths).sorted().joinToString("\n") + "\n") }
+    }
+
+    fun placeholderHeader(path: String): String = "$PLACEHOLDER_MARK $path\n"
+
+    private fun isPlaceholder(file: File): Boolean {
+        if (!file.isFile) return false
+        if (file.length() == 0L) return true
+        if (file.length() > 512) return false
+        return runCatching { file.readText().contains(PLACEHOLDER_MARK) }.getOrDefault(false)
+    }
+
+    fun fileStatus(project: String, relativePath: String, expected: Set<String> = expectedFiles(project)): FileStatus {
+        val f = resolve(project, relativePath)
+        if (f == null || !f.exists()) return if (relativePath in expected) FileStatus.MISSING else FileStatus.BROKEN
+        if (f.isDirectory) return FileStatus.BROKEN
+        if (!f.canRead()) return FileStatus.BROKEN
+        return if (isPlaceholder(f)) FileStatus.PLACEHOLDER else FileStatus.COLLECTED
+    }
+
+    /** Worst status among the files below a folder: red beats yellow beats blue. */
+    fun folderStatus(project: String, relativePath: String, expected: Set<String> = expectedFiles(project)): FileStatus {
+        val prefix = if (relativePath.isBlank()) "" else "$relativePath/"
+        var worst = FileStatus.COLLECTED
+        val dir = resolve(project, relativePath)
+        val seen = mutableSetOf<String>()
+        if (dir != null && dir.isDirectory) {
+            for (f in dir.walkTopDown()) {
+                if (!f.isFile || f.name.startsWith(".vibe")) continue
+                val rel = prefix + f.toRelativeString(dir).replace(File.separatorChar, '/')
+                seen += rel
+                val st = fileStatus(project, rel, expected)
+                if (st.ordinal > worst.ordinal) worst = st
+            }
+        }
+        if (expected.any { it.startsWith(prefix) && it !in seen }) return FileStatus.MISSING
+        return worst
+    }
+
+    /**
+     * Pick the structure file a captured path belongs to: an exact match, or the
+     * only (preferring still-empty) expected file with the same name. Null when
+     * the project has no structure or nothing matches.
+     */
+    fun matchStructure(project: String, path: String): String? {
+        val expected = expectedFiles(project)
+        if (expected.isEmpty()) return null
+        val clean = path.trim().trim('/')
+        if (clean in expected) return clean
+        val name = clean.substringAfterLast('/').lowercase()
+        val candidates = expected.filter {
+            it.endsWith("/$clean", ignoreCase = true) || it.substringAfterLast('/').lowercase() == name
+        }
+        if (candidates.isEmpty()) return null
+        val suffixMatches = candidates.filter { it.endsWith("/$clean", ignoreCase = true) }
+        val pool = suffixMatches.ifEmpty { candidates }
+        val open = pool.filter { c -> fileStatus(project, c, expected) != FileStatus.COLLECTED }
+        return (open.ifEmpty { pool }).sorted().first()
     }
 
     fun readFile(project: String, relativePath: String): String? {
@@ -212,6 +312,7 @@ class ProjectStore(context: Context) {
 
         var dirsMade = 0
         var filesMade = 0
+        val expectedNow = mutableSetOf<String>()
         for (entry in entries) {
             var rel = entry.path.trim('/')
             if (singleWrapper) rel = rel.removePrefix(topDirs.first()).trim('/')
@@ -221,6 +322,7 @@ class ProjectStore(context: Context) {
             val canonical = runCatching { target.canonicalFile }.getOrNull() ?: continue
             if (canonical != rootCanonical && !canonical.path.startsWith(rootCanonical.path + File.separator)) continue
 
+            if (!entry.isDirectory) expectedNow += rel
             if (entry.isDirectory) {
                 if (!canonical.exists() && runCatching { canonical.mkdirs() }.getOrDefault(false)) dirsMade++
             } else {
@@ -228,12 +330,13 @@ class ProjectStore(context: Context) {
                 canonical.parentFile?.mkdirs()
                 val written = runCatching {
                     canonical.parentFile?.mkdirs()
-                    canonical.writeText(placeholderText ?: "")
+                    canonical.writeText(placeholderHeader(rel) + (placeholderText ?: ""))
                     true
                 }.getOrDefault(false)
                 if (written) filesMade++
             }
         }
+        recordExpected(project, expectedNow)
         return ScaffoldResult(dirsMade, filesMade, null)
     }
 
@@ -252,7 +355,9 @@ class ProjectStore(context: Context) {
         if (!dir.exists() && !runCatching { dir.mkdirs() }.getOrDefault(false)) {
             return WriteOutcome(emptyList(), files.map { it.path }, "could not create project folder")
         }
-        val conflicts = files.map { it.path }.filter { path -> resolve(project, path)?.exists() == true }.distinct()
+        val conflicts = files.map { it.path }.filter { path ->
+            resolve(project, path)?.let { it.exists() && !isPlaceholder(it) } == true
+        }.distinct()
         if (policy == ExistingFilePolicy.ASK && conflicts.isNotEmpty()) {
             return WriteOutcome(emptyList(), emptyList(), conflicts = conflicts)
         }
@@ -283,7 +388,7 @@ class ProjectStore(context: Context) {
 
     private fun uniquePath(project: String, path: String, reserved: Set<String>): String {
         val file = resolve(project, path) ?: return path
-        if (!file.exists() && path !in reserved) return path
+        if ((!file.exists() || isPlaceholder(file)) && path !in reserved) return path
         val parent = path.substringBeforeLast('/', "")
         val name = path.substringAfterLast('/')
         val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
@@ -381,6 +486,10 @@ class ProjectStore(context: Context) {
 
     companion object {
         const val LOG_FILE = ".vibe-log.txt"
+        const val STRUCTURE_FILE = ".vibe-structure.txt"
+        const val PLACEHOLDER_MARK = "VIBE-PLACEHOLDER:"
+        /** Folder (shown as a project) where copies that fit no project structure wait until deleted. */
+        const val MISC_PROJECT = "_Misc"
         const val MAX_EDIT_BYTES = 2L * 1024 * 1024
     }
 }

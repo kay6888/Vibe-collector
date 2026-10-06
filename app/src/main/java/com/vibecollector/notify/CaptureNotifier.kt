@@ -35,6 +35,8 @@ object CaptureNotifier {
     private const val RESULT_ID = 4201
     private const val CAPTURE_TAG = "vibe-capture:"
     private const val RESULT_TAG = "vibe-capture-result"
+    private const val SUMMARY_ID = 4202
+    private const val SUMMARY_TAG = "vibe-capture-summary"
 
     private fun captureNotificationId(captureId: String): Int = (captureId.hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
 
@@ -135,6 +137,45 @@ object CaptureNotifier {
             .addAction(0, "Open", open)
 
         post(context, captureNotificationId(capture.id), builder.build(), CAPTURE_TAG + capture.id)
+        refreshSummary(context)
+    }
+
+    /**
+     * One notification for everything collected so far, with Approve all / Discard
+     * all. Removed once nothing is waiting.
+     */
+    fun refreshSummary(context: Context) {
+        val pending = Vibe.captureCoordinator.list()
+        if (pending.size < 2) {
+            clearSummary(context)
+            return
+        }
+        ensureChannels(context)
+        val files = pending.sumOf { it.fileCount }
+        val approve = actionIntent(context, CaptureActionReceiver.ACTION_SAVE_ALL, "", 3)
+        val discard = actionIntent(context, CaptureActionReceiver.ACTION_DISCARD_ALL, "", 4)
+        val open = PendingIntent.getActivity(
+            context, 5,
+            Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val text = "${pending.size} captures • $files files waiting for your approval"
+        val n = NotificationCompat.Builder(context, CHANNEL_CAPTURE)
+            .setSmallIcon(R.drawable.ic_stat_vibe)
+            .setContentTitle("Everything collected")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(open)
+            .addAction(0, "Approve all", approve)
+            .addAction(0, "Discard all", discard)
+            .build()
+        post(context, SUMMARY_ID, n, SUMMARY_TAG)
+    }
+
+    fun clearSummary(context: Context) {
+        NotificationManagerCompat.from(context).cancel(SUMMARY_TAG, SUMMARY_ID)
     }
 
     /** Confirmation after a save or discard. */
@@ -176,7 +217,7 @@ object CaptureNotifier {
     fun clearCaptureNotifications(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         manager.activeNotifications
-            .filter { it.tag?.startsWith(CAPTURE_TAG) == true || it.tag == RESULT_TAG }
+            .filter { it.tag?.startsWith(CAPTURE_TAG) == true || it.tag == RESULT_TAG || it.tag == SUMMARY_TAG }
             .forEach { manager.cancel(it.tag, it.id) }
     }
 

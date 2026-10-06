@@ -2,6 +2,14 @@ package com.vibecollector.data
 
 import kotlinx.serialization.Serializable
 
+/**
+ * Colour-coded state of a project file.
+ *  - COLLECTED: real content has been collected (blue)
+ *  - PLACEHOLDER: generated from the structure, waiting for code (yellow)
+ *  - MISSING / BROKEN: expected by the structure but absent or unreadable (red)
+ */
+enum class FileStatus { COLLECTED, PLACEHOLDER, MISSING, BROKEN }
+
 /** A file on disk inside the app's project storage. */
 data class FileNode(
     val name: String,
@@ -10,6 +18,7 @@ data class FileNode(
     val sizeBytes: Long = 0,
     val childCount: Int = 0,
     val modifiedAt: Long = 0L,
+    val status: FileStatus = FileStatus.COLLECTED,
 )
 
 /** A top-level project folder. */

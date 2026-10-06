@@ -67,7 +67,10 @@ class ChatAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
         when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> lastForegroundPackage = pkg
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                lastForegroundPackage = pkg
+                Vibe.noteForeground(pkg)
+            }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                 val label = event.text?.joinToString(" ")?.trim()?.lowercase().orEmpty()
                 if (label == "copy" || label == "copy code" || label == "copy text") {
