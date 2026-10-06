@@ -295,11 +295,11 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
         refreshProjects()
     }
 
-    fun exportProject(name: String) = viewModelScope.launch(Dispatchers.IO) {
+    fun exportProject(name: String, destination: Uri) = viewModelScope.launch(Dispatchers.IO) {
         _state.update { it.copy(busy = true) }
-        val uri = store.exportZipToDownloads(name)
+        val exported = store.exportZip(name, destination)
         _state.update {
-            it.copy(busy = false, message = if (uri != null) "Exported to Downloads" else "Export failed")
+            it.copy(busy = false, message = if (exported) "Project ZIP saved" else "Export failed")
         }
     }
 

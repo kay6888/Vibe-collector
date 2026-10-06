@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -90,11 +92,20 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
     var showNewFolder by remember { mutableStateOf(false) }
     var showNewProject by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    var exportProjectName by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<FileNode?>(null) }
     var renameTarget by remember { mutableStateOf<FileNode?>(null) }
     var moveTarget by remember { mutableStateOf<FileNode?>(null) }
     var movePath by remember { mutableStateOf("") }
     var searchQuery by remember(browse.project, browse.path) { mutableStateOf("") }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri ->
+        val project = exportProjectName
+        exportProjectName = null
+        if (uri != null && project != null) vm.exportProject(project, uri)
+    }
 
     LaunchedEffect(browse.project) { vm.refreshProjects() }
 
@@ -243,12 +254,16 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
             title = { Text("Export ${browse.project}") },
             text = {
                 Text(
-                    "A zip of the whole project is written to your Downloads folder as " +
-                        "${browse.project}.zip. Nothing leaves the device.",
+                    "Choose Downloads in the save dialog to save a ZIP of the whole project to your phone. " +
+                        "Nothing leaves the device.",
                 )
             },
             confirmButton = {
-                TextButton(onClick = { vm.exportProject(browse.project); showExport = false }) {
+                TextButton(onClick = {
+                    exportProjectName = browse.project
+                    exportLauncher.launch("${browse.project}.zip")
+                    showExport = false
+                }) {
                     Text("Export")
                 }
             },
