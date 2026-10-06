@@ -1,7 +1,6 @@
 package com.vibecollector.ui.theme
 
 import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -16,6 +15,13 @@ val VibePurple = Color(0xFF7A5CFF)
 val VibeInk = Color(0xFF1B1B2E)
 val VibeMint = Color(0xFF2BD9A8)
 val VibeAmber = Color(0xFFFFB020)
+
+val NeonCyan = Color(0xFF00F0FF)
+val NeonMagenta = Color(0xFFFF2BD6)
+val NeonGreen = Color(0xFF39FF14)
+val StatusBlue = Color(0xFF2E9BFF)
+val StatusYellow = Color(0xFFFFE600)
+val StatusRed = Color(0xFFFF3B5C)
 
 private val LightColors = lightColorScheme(
     primary = VibePurple,
@@ -36,35 +42,41 @@ private val LightColors = lightColorScheme(
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFB9A7FF),
-    onPrimary = Color(0xFF2A0F73),
-    primaryContainer = Color(0xFF412C8F),
-    onPrimaryContainer = Color(0xFFE8E3FF),
-    secondary = Color(0xFF7BE8C4),
-    onSecondary = Color(0xFF00382A),
-    tertiary = Color(0xFFFFD08A),
-    background = Color(0xFF121218),
-    onBackground = Color(0xFFE6E1EC),
-    surface = Color(0xFF1A1A22),
-    onSurface = Color(0xFFE6E1EC),
-    surfaceVariant = Color(0xFF2A2A34),
-    onSurfaceVariant = Color(0xFFC9C4D4),
-    outline = Color(0xFF5C5A6B),
+    primary = NeonCyan,
+    onPrimary = Color(0xFF00141A),
+    primaryContainer = Color(0xFF06303A),
+    onPrimaryContainer = Color(0xFFB8FBFF),
+    secondary = NeonMagenta,
+    onSecondary = Color(0xFF2A0020),
+    secondaryContainer = Color(0xFF3A0A33),
+    onSecondaryContainer = Color(0xFFFFD0F5),
+    tertiary = NeonGreen,
+    onTertiary = Color(0xFF062000),
+    background = Color(0xFF05050D),
+    onBackground = Color(0xFFE8F4FF),
+    surface = Color(0xFF0B0B18),
+    onSurface = Color(0xFFE8F4FF),
+    surfaceVariant = Color(0xFF151528),
+    onSurfaceVariant = Color(0xFFA9B4D0),
+    surfaceContainer = Color(0xFF0F0F20),
+    surfaceContainerHigh = Color(0xFF151530),
+    outline = Color(0xFF3B3B66),
+    error = StatusRed,
 )
 
 @Composable
 fun VibeCollectorTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    val colors = if (darkTheme) DarkColors else LightColors
+    val colors = if (darkTheme) DarkColors else LightColors // the neon look is dark-first
     val view = LocalView.current
     if (!view.isInEditMode) {
         val context = LocalContext.current
         SideEffect {
             val activity = context as? Activity ?: return@SideEffect
             val window = activity.window
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
         }
     }
     MaterialTheme(colorScheme = colors, content = content)

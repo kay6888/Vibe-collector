@@ -36,7 +36,12 @@ data class BrowseState(
     val loading: Boolean = false,
 )
 
+/** One visible row of the drop-down project tree. */
+data class TreeRow(val node: FileNode, val depth: Int, val expanded: Boolean)
+
 data class UiState(
+    val tree: List<TreeRow> = emptyList(),
+    val expanded: Set<String> = emptySet(),
     val projects: List<Project> = emptyList(),
     val browse: BrowseState = BrowseState(),
     val pending: List<PendingCapture> = emptyList(),
@@ -95,9 +100,32 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openProject(name: String, path: String = "") = viewModelScope.launch(Dispatchers.IO) {
+        val sameProject = _state.value.browse.project == name
         _state.update { it.copy(browse = it.browse.copy(project = name, path = path, loading = true)) }
         val nodes = store.listDir(name, path)
-        _state.update { it.copy(browse = it.browse.copy(nodes = nodes, loading = false)) }
+        val expanded = if (sameProject) _state.value.expanded else emptySet()
+        val tree = buildTree(name, expanded)
+        _state.update { it.copy(browse = it.browse.copy(nodes = nodes, loading = false), expanded = expanded, tree = tree) }
+    }
+
+    private fun buildTree(project: String, expanded: Set<String>): List<TreeRow> {
+        val rows = mutableListOf<TreeRow>()
+        fun walk(path: String, depth: Int) {
+            for (node in store.listDir(project, path)) {
+                val open = node.isDirectory && node.path in expanded
+                rows += TreeRow(node, depth, open)
+                if (open) walk(node.path, depth + 1)
+            }
+        }
+        if (project.isNotBlank()) walk("", 0)
+        return rows
+    }
+
+    fun toggleFolder(node: FileNode) = viewModelScope.launch(Dispatchers.IO) {
+        val project = _state.value.browse.project
+        val cur = _state.value.expanded
+        val next = if (node.path in cur) cur - node.path else cur + node.path
+        _state.update { it.copy(expanded = next, tree = buildTree(project, next)) }
     }
 
     fun navigateTo(node: FileNode) {

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bubble_bg">#E61B1B2E</color>
-    <color name="bubble_accent">#FF7A5CFF</color>
+    <color name="bubble_bg">#F205050D</color>
+    <color name="bubble_accent">#FF00F0FF</color>
 </resources>

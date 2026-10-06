@@ -161,16 +161,26 @@ class CaptureCoordinator(
                 remove(id)
                 return@withContext SaveReport(true, "Structure created in $project", project, emptyList())
             }
-            val outcome = store.writeCapture(project, files, conflictPolicy)
+            // Route each file into its slot in the generated structure; anything that
+            // fits nowhere is parked in the misc folder instead of polluting the project.
+            val hasStructure = store.expectedFiles(project).isNotEmpty()
+            val routed = mutableListOf<CapturedFile>()
+            val misc = mutableListOf<CapturedFile>()
+            for (f in files) {
+                val target = if (hasStructure) store.matchStructure(project, f.path) else f.path
+                if (target == null) misc += f else routed += f.copy(path = target)
+            }
+            val outcome = store.writeCapture(project, routed, conflictPolicy)
             if (outcome.conflicts.isNotEmpty()) {
                 return@withContext SaveReport(false, "Files already exist in $project", project, conflicts = outcome.conflicts)
             }
             if (outcome.error != null) {
                 SaveReport(false, outcome.error, project, emptyList())
             } else {
-                store.appendCaptureLog(project, capture.sourceLabel, outcome.written)
+                val miscWritten = if (misc.isEmpty()) 0 else store.writeCapture(ProjectStore.MISC_PROJECT, misc, ExistingFilePolicy.KEEP_BOTH).written.size
+                if (outcome.written.isNotEmpty()) store.appendCaptureLog(project, capture.sourceLabel, outcome.written)
                 remove(id)
-                SaveReport(true, null, project, outcome.written)
+                SaveReport(true, null, project, outcome.written, miscCount = miscWritten)
             }
         }
 
@@ -198,10 +208,13 @@ data class SaveReport(
     val project: String = "",
     val written: List<String> = emptyList(),
     val conflicts: List<String> = emptyList(),
+    val miscCount: Int = 0,
 ) {
     val summary: String
         get() = when {
             !ok -> error ?: "could not save"
+            written.isEmpty() && miscCount > 0 -> "$miscCount file${if (miscCount == 1) "" else "s"} stored in Misc (not part of $project)"
+            miscCount > 0 -> "Saved ${written.size} to $project, $miscCount to Misc"
             written.isEmpty() -> "Created $project"
             written.size == 1 -> "Saved ${written.first()}"
             else -> "Saved ${written.size} files to $project"

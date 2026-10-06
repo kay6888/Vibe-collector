@@ -1,10 +1,25 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
+    <!-- vibration arcs -->
+    <path android:strokeColor="#FF2BD6" android:strokeWidth="2.5" android:strokeAlpha="0.8"
+        android:strokeLineCap="round"
+        android:pathData="M22,40 Q16,54 22,68 M86,40 Q92,54 86,68"/>
+    <path android:strokeColor="#FF2BD6" android:strokeWidth="1.8" android:strokeAlpha="0.45"
+        android:strokeLineCap="round"
+        android:pathData="M15,34 Q7,54 15,74 M93,34 Q101,54 93,74"/>
+    <!-- net: radial spokes -->
+    <path android:strokeColor="#00F0FF" android:strokeWidth="1.6" android:strokeLineCap="round"
+        android:pathData="M54,54 L54,26 M54,54 L78.3,40 M54,54 L78.3,68 M54,54 L54,82 M54,54 L29.7,68 M54,54 L29.7,40"/>
+    <!-- net: outer ring -->
+    <path android:strokeColor="#00F0FF" android:strokeWidth="2.2" android:strokeLineJoin="round"
+        android:pathData="M54,26 L78.3,40 L78.3,68 L54,82 L29.7,68 L29.7,40 Z"/>
+    <!-- net: inner ring -->
+    <path android:strokeColor="#39FF14" android:strokeWidth="1.8" android:strokeLineJoin="round"
+        android:pathData="M54,39 L66.9,46.5 L66.9,61.5 L54,69 L41.1,61.5 L41.1,46.5 Z"/>
+    <!-- nodes -->
+    <path android:fillColor="#FF2BD6"
+        android:pathData="M54,22.5a3.5,3.5 0,1 0,0.01 0zM81.3,38.5a3.5,3.5 0,1 0,0.01 0zM81.3,69.5a3.5,3.5 0,1 0,0.01 0zM54,85.5a3.5,3.5 0,1 0,0.01 0zM26.7,69.5a3.5,3.5 0,1 0,0.01 0zM26.7,38.5a3.5,3.5 0,1 0,0.01 0z"/>
     <path android:fillColor="#FFFFFF"
-        android:pathData="M32,34h18c6,0 11,4.4 12,10.4L65,74c1,6 -3.6,11.2 -9.6,11.2H32V34z"/>
-    <path android:fillColor="#C9BFFF"
-        android:pathData="M76,34h-9.5c-5.6,0 -10,4.4 -10,10v41.2c0,4.6 3.8,8.4 8.4,8.4H76V34z"/>
-    <path android:fillColor="#7A5CFF"
-        android:pathData="M40,44h11v5H40zM40,54h8v5h-8zM61,44h9v5h-9z"/>
+        android:pathData="M54,50a4,4 0,1 0,0.01 0z"/>
 </vector>

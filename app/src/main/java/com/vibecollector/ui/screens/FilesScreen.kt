@@ -1,6 +1,15 @@
 package com.vibecollector.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.ui.graphics.Color
+import com.vibecollector.data.FileStatus
+import com.vibecollector.ui.theme.StatusBlue
+import com.vibecollector.ui.theme.StatusRed
+import com.vibecollector.ui.theme.StatusYellow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +51,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -92,6 +102,10 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
         topBar = {
             Column {
                 TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        titleContentColor = MaterialTheme.colorScheme.primary,
+                    ),
                     title = {
                         Column {
                             Text(browse.project.ifBlank { "No project" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -167,28 +181,32 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
                 return@Column
             }
 
-            val visibleNodes = browse.nodes.filter {
-                it.name.contains(searchQuery, ignoreCase = true) || it.path.contains(searchQuery, ignoreCase = true)
+            val visibleRows = if (searchQuery.isBlank()) state.tree else state.tree.filter {
+                it.node.name.contains(searchQuery, ignoreCase = true) || it.node.path.contains(searchQuery, ignoreCase = true)
             }
-            if (visibleNodes.isEmpty() && !browse.loading) {
-                EmptyHint(if (searchQuery.isBlank()) "This folder is empty.\nCopy some code from a chatbot and it will show up here." else "No files match ‘$searchQuery’ in this folder.")
+            if (visibleRows.isEmpty() && !browse.loading) {
+                EmptyHint(if (searchQuery.isBlank()) "This project is empty.\nGenerate a structure or copy code from a chatbot and it will show up here." else "No files match ‘$searchQuery’.")
                 return@Column
             }
 
+            StatusLegend()
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(visibleNodes, key = { it.path }) { node ->
+                items(visibleRows, key = { it.node.path }) { row ->
+                    val node = row.node
                     FileRow(
                         node = node,
+                        depth = row.depth,
+                        expanded = row.expanded,
                         contextTime = { formatTime(context, node.modifiedAt) },
                         size = { VibeViewModel.formatSize(context, node.sizeBytes) },
                         onClick = {
-                            if (node.isDirectory) vm.navigateTo(node) else vm.openFile(node)
+                            if (node.isDirectory) vm.toggleFolder(node)
+                            else if (node.status != FileStatus.MISSING) vm.openFile(node)
                         },
                         onRename = { renameTarget = node },
                         onMove = { moveTarget = node; movePath = "" },
                         onDelete = { pendingDelete = node },
                     )
-                    HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
                 }
                 item { Spacer(Modifier.height(96.dp)) }
             }
@@ -287,8 +305,24 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
 }
 
 @Composable
+private fun StatusLegend() {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (st in listOf(FileStatus.COLLECTED, FileStatus.PLACEHOLDER, FileStatus.MISSING)) {
+            Box(Modifier.size(10.dp).background(statusColor(st), CircleShape))
+            Text(statusLabel(st), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 private fun FileRow(
     node: FileNode,
+    depth: Int,
+    expanded: Boolean,
     contextTime: () -> String,
     size: () -> String,
     onClick: () -> Unit,
@@ -297,54 +331,75 @@ private fun FileRow(
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val color = statusColor(node.status)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(start = (12 + depth * 20).dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (node.isDirectory) {
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = color,
+                modifier = Modifier.size(22.dp),
+            )
+        } else {
+            Spacer(Modifier.width(22.dp))
+        }
         Icon(
             imageVector = if (node.isDirectory) Icons.Filled.Folder else Icons.Filled.Description,
             contentDescription = null,
-            tint = if (node.isDirectory) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp),
+            tint = color,
+            modifier = Modifier.size(22.dp),
         )
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(node.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+            Text(node.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium, color = color)
             Text(
                 buildString {
-                    if (node.isDirectory) {
+                    if (node.status == FileStatus.MISSING) {
+                        append("missing")
+                    } else if (node.isDirectory) {
                         append("${node.childCount} item")
                         if (node.childCount != 1) append("s")
                     } else {
                         append(size())
+                        append("  •  ").append(statusLabel(node.status))
                     }
-                    val t = contextTime()
+                    val t = if (node.status == FileStatus.MISSING) "" else contextTime()
                     if (t.isNotBlank()) append("  •  ").append(t)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Box {
+        if (node.status != FileStatus.MISSING) Box {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "File actions")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; onRename() })
                 DropdownMenuItem(text = { Text("Move") }, onClick = { menuOpen = false; onMove() })
-                if (node.isDirectory) {
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        onClick = { menuOpen = false; onDelete() },
-                    )
-                }
+                DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; onDelete() })
             }
         }
     }
+}
+
+private fun statusColor(status: FileStatus): Color = when (status) {
+    FileStatus.COLLECTED -> StatusBlue
+    FileStatus.PLACEHOLDER -> StatusYellow
+    FileStatus.MISSING, FileStatus.BROKEN -> StatusRed
+}
+
+private fun statusLabel(status: FileStatus): String = when (status) {
+    FileStatus.COLLECTED -> "collected"
+    FileStatus.PLACEHOLDER -> "placeholder"
+    FileStatus.MISSING -> "missing"
+    FileStatus.BROKEN -> "broken"
 }
 
 @Composable

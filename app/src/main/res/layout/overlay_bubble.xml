@@ -10,15 +10,14 @@
         android:layout_height="match_parent"
         android:background="@drawable/bubble_circle" />
 
-    <TextView
+    <ImageView
         android:id="@+id/bubbleIcon"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:gravity="center"
-        android:text="V"
-        android:textColor="#FFFFFF"
-        android:textSize="22sp"
-        android:textStyle="bold" />
+        android:padding="0dp"
+        android:scaleType="fitCenter"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_launcher_foreground" />
 
     <TextView
         android:id="@+id/bubbleBadge"
@@ -27,7 +26,7 @@
         android:layout_gravity="top|end"
         android:background="@drawable/badge_circle"
         android:gravity="center"
-        android:textColor="#1B1B2E"
+        android:textColor="#05050D"
         android:textSize="11sp"
         android:textStyle="bold"
         android:visibility="gone"

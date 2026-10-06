@@ -8,7 +8,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,7 +18,7 @@ import com.vibecollector.VibeTab
 
 @Composable
 fun VibeNavBar(current: VibeTab, pendingCount: Int, onSelect: (VibeTab) -> Unit) {
-    NavigationBar {
+    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         VibeTab.entries.forEach { tab ->
             NavigationBarItem(
                 selected = current == tab,
@@ -31,6 +33,11 @@ fun VibeNavBar(current: VibeTab, pendingCount: Int, onSelect: (VibeTab) -> Unit)
                     }
                 },
                 label = { Text(tab.label) },
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary,
+                ),
             )
         }
     }

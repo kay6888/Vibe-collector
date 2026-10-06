@@ -41,6 +41,7 @@ class CaptureActionReceiver : BroadcastReceiver() {
                     val report = coordinator.save(id, conflictPolicy = settings.existingFilePolicy)
                     withMain {
                         if (report.ok) CaptureNotifier.clearCapturePrompt(context, id)
+                        CaptureNotifier.refreshSummary(context)
                         if (report.conflicts.isNotEmpty()) openCapture(context, id)
                         else CaptureNotifier.showResult(context, if (report.ok) "Saved" else "Could not save", report.summary)
                     }
@@ -50,7 +51,16 @@ class CaptureActionReceiver : BroadcastReceiver() {
             ACTION_DISCARD -> {
                 coordinator.remove(id)
                 CaptureNotifier.clearCapturePrompt(context, id)
+                CaptureNotifier.refreshSummary(context)
                 CaptureNotifier.showResult(context, "Discarded", "The capture was not written to disk.")
+            }
+
+            ACTION_DISCARD_ALL -> {
+                val captures = coordinator.list()
+                coordinator.clear()
+                captures.forEach { CaptureNotifier.clearCapturePrompt(context, it.id) }
+                CaptureNotifier.clearSummary(context)
+                CaptureNotifier.showResult(context, "Discarded all", "${captures.size} capture(s) were not written to disk.")
             }
 
             ACTION_SAVE_ALL -> {
@@ -62,6 +72,7 @@ class CaptureActionReceiver : BroadcastReceiver() {
                         val ok = reports.count { it.ok }
                         val remainingIds = coordinator.list().map { it.id }.toSet()
                         captures.filterNot { it.id in remainingIds }.forEach { CaptureNotifier.clearCapturePrompt(context, it.id) }
+                        CaptureNotifier.refreshSummary(context)
                         val conflict = reports.firstOrNull { it.conflicts.isNotEmpty() }
                         if (conflict != null) {
                             captures.getOrNull(reports.indexOfFirst { it.conflicts.isNotEmpty() })
@@ -100,6 +111,7 @@ class CaptureActionReceiver : BroadcastReceiver() {
         const val ACTION_SAVE = "com.vibecollector.action.SAVE"
         const val ACTION_DISCARD = "com.vibecollector.action.DISCARD"
         const val ACTION_SAVE_ALL = "com.vibecollector.action.SAVE_ALL"
+        const val ACTION_DISCARD_ALL = "com.vibecollector.action.DISCARD_ALL"
         const val EXTRA_ID = "capture_id"
     }
 }
