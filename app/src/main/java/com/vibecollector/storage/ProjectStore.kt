@@ -1,11 +1,7 @@
 package com.vibecollector.storage
 
-import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import com.vibecollector.data.CapturedFile
 import com.vibecollector.data.FileNode
 import com.vibecollector.data.FileStatus
@@ -427,54 +423,38 @@ class ProjectStore(context: Context) {
 
     // ------------------------------------------------------------------ export
 
-    /** Zip a project into Downloads via MediaStore. Returns the resulting content Uri. */
-    fun exportZipToDownloads(project: String): Uri? {
-        val dir = projectDir(project) ?: return null
-        if (!dir.isDirectory) return null
-        val fileName = "${sanitizeForFilename(project)}.zip"
-        return runCatching {
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                    put(MediaStore.MediaColumns.IS_PENDING, 1)
-                }
-            }
-            val resolver = appContext.contentResolver
-            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-            val uri = resolver.insert(collection, values) ?: return null
-            try {
-                resolver.openOutputStream(uri)?.use { out ->
-                    ZipOutputStream(out).use { zip ->
-                        val rootPrefix = "${sanitizeForFilename(project)}/"
-                        dir.walkTopDown().forEach { f ->
-                            if (f == dir) return@forEach
-                            val rel = rootPrefix + dir.toRelativeString(f)
-                            if (f.isDirectory) {
-                                runCatching { zip.putNextEntry(ZipEntry("$rel/")); zip.closeEntry() }
-                            } else {
-                                zip.putNextEntry(ZipEntry(rel))
-                                FileInputStream(f).use { it.copyTo(zip) }
-                                zip.closeEntry()
-                            }
-                        }
+    /** Zip a project to a user-selected document Uri. */
+    fun exportZip(project: String, destination: Uri): Boolean {
+        val dir = projectDir(project) ?: return false
+        if (!dir.isDirectory) return false
+        val resolver = appContext.contentResolver
+        return try {
+            val output = resolver.openOutputStream(destination, "w")
+                ?: throw IOException("Could not open export destination")
+            ZipOutputStream(output).use { zip ->
+                val rootPrefix = "${sanitizeForFilename(project)}/"
+                dir.walkTopDown().forEach { file ->
+                    if (file == dir) return@forEach
+                    val relativePath = file.relativeTo(dir).path.replace(File.separatorChar, '/')
+                    val entryName = rootPrefix + relativePath
+                    if (file.isDirectory) {
+                        zip.putNextEntry(ZipEntry("$entryName/"))
+                        zip.closeEntry()
+                    } else {
+                        zip.putNextEntry(ZipEntry(entryName))
+                        FileInputStream(file).use { it.copyTo(zip) }
+                        zip.closeEntry()
                     }
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    values.clear()
-                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                    resolver.update(uri, values, null, null)
-                }
-                uri
-            } catch (e: Exception) {
-                runCatching { resolver.delete(uri, null, null) }
-                null
             }
-        }.getOrNull()
+            true
+        } catch (_: Exception) {
+            runCatching { resolver.delete(destination, null, null) }
+            false
+        }
     }
 
-    /** Copy a project into Downloads as a real directory tree (pre-Q only, or via SAF). */
+    /** Total size of the project's regular files. */
     fun projectBytes(project: String): Long =
         projectDir(project)?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
 

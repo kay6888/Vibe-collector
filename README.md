@@ -60,8 +60,8 @@ Android/data/com.vibecollector/files/Projects/<project>/...
 ```
 
 That needs no storage permission on any supported Android version. Because the folder is
-app-scoped, uninstalling vibe-collector deletes it — use **Export ZIP** (which writes to
-your Downloads folder via the media store) to keep a copy.
+app-scoped, uninstalling vibe-collector deletes it — use **Export to Downloads** and choose
+the Downloads folder in the save dialog to keep a copy.
 
 Every path coming out of the clipboard or an AI response is sanitised: absolute paths,
 drive letters, `..` traversal, and backslash traversal are all rejected before anything
