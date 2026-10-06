@@ -125,6 +125,15 @@ class CaptureCoordinator(
         }
     }
 
+    /** Keep only the files that still need another save attempt. */
+    private fun replaceFiles(id: String, files: List<CapturedFile>) {
+        synchronized(lock) {
+            val current = pending[id] ?: return
+            pending[id] = current.copy(files = files)
+            persist()
+        }
+    }
+
     fun clear() {
         synchronized(lock) {
             pending.clear()
@@ -177,10 +186,40 @@ class CaptureCoordinator(
             if (outcome.error != null) {
                 SaveReport(false, outcome.error, project, emptyList())
             } else {
-                val miscWritten = if (misc.isEmpty()) 0 else store.writeCapture(ProjectStore.MISC_PROJECT, misc, ExistingFilePolicy.KEEP_BOTH).written.size
-                if (outcome.written.isNotEmpty()) store.appendCaptureLog(project, capture.sourceLabel, outcome.written)
-                remove(id)
-                SaveReport(true, null, project, outcome.written, miscCount = miscWritten)
+                val failed = routed.filter { it.path in outcome.skipped }.toMutableList()
+                var miscWritten = 0
+                for (file in misc) {
+                    val miscOutcome = store.writeCapture(
+                        ProjectStore.MISC_PROJECT,
+                        listOf(file),
+                        ExistingFilePolicy.KEEP_BOTH,
+                    )
+                    val stored = miscOutcome.error == null &&
+                        miscOutcome.conflicts.isEmpty() &&
+                        miscOutcome.skipped.isEmpty() &&
+                        miscOutcome.written.isNotEmpty()
+                    if (stored) miscWritten++ else failed += file
+                }
+                if (outcome.written.isNotEmpty()) {
+                    store.appendCaptureLog(project, capture.sourceLabel, outcome.written)
+                }
+                if (failed.isNotEmpty()) {
+                    replaceFiles(id, failed)
+                    val detail = buildString {
+                        if (outcome.skipped.isNotEmpty()) {
+                            append("${outcome.skipped.size} file(s) could not be written to $project")
+                        }
+                        val miscFailed = failed.count { it.path !in outcome.skipped }
+                        if (miscFailed > 0) {
+                            if (isNotEmpty()) append("; ")
+                            append("$miscFailed file(s) could not be stored in Misc")
+                        }
+                    }
+                    SaveReport(false, detail, project, outcome.written, miscCount = miscWritten)
+                } else {
+                    remove(id)
+                    SaveReport(true, null, project, outcome.written, miscCount = miscWritten)
+                }
             }
         }
 

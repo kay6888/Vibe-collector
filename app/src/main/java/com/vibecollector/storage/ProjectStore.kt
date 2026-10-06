@@ -161,9 +161,7 @@ class ProjectStore(context: Context) {
     fun placeholderHeader(path: String): String = "$PLACEHOLDER_MARK $path\n"
 
     private fun isPlaceholder(file: File): Boolean {
-        if (!file.isFile) return false
-        if (file.length() == 0L) return true
-        if (file.length() > 512) return false
+        if (!file.isFile || file.length() == 0L || file.length() > 512) return false
         return runCatching { file.readText().contains(PLACEHOLDER_MARK) }.getOrDefault(false)
     }
 
@@ -425,12 +423,22 @@ class ProjectStore(context: Context) {
 
     /** Zip a project to a user-selected document Uri. */
     fun exportZip(project: String, destination: Uri): Boolean {
-        val dir = projectDir(project) ?: return false
-        if (!dir.isDirectory) return false
         val resolver = appContext.contentResolver
+        val output = runCatching { resolver.openOutputStream(destination, "w") }.getOrNull()
+            ?: return false
+        val wrote = writeProjectZip(project, output)
+        if (!wrote) runCatching { resolver.delete(destination, null, null) }
+        return wrote
+    }
+
+    /** Write a project archive to [output], which is closed before this returns. */
+    fun writeProjectZip(project: String, output: java.io.OutputStream): Boolean {
+        val dir = projectDir(project)
+        if (dir == null || !dir.isDirectory) {
+            runCatching { output.close() }
+            return false
+        }
         return try {
-            val output = resolver.openOutputStream(destination, "w")
-                ?: throw IOException("Could not open export destination")
             ZipOutputStream(output).use { zip ->
                 val rootPrefix = "${sanitizeForFilename(project)}/"
                 dir.walkTopDown().forEach { file ->
@@ -449,7 +457,6 @@ class ProjectStore(context: Context) {
             }
             true
         } catch (_: Exception) {
-            runCatching { resolver.delete(destination, null, null) }
             false
         }
     }
