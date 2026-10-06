@@ -198,12 +198,10 @@ class BubbleService : LifecycleService() {
             Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
                 Settings.canDrawOverlays(context)
 
-        fun overlaySettingsIntent(): Intent =
+        fun overlaySettingsIntent(packageName: String): Intent =
             Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                android.net.Uri.parse("package:$PACKAGE_NAME"),
+                android.net.Uri.parse("package:$packageName"),
             )
-
-        const val PACKAGE_NAME = "com.vibecollector"
     }
 }

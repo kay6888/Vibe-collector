@@ -3,8 +3,8 @@ package com.vibecollector.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.ui.graphics.Color
 import com.vibecollector.data.FileStatus
 import com.vibecollector.ui.theme.StatusBlue
@@ -59,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +73,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vibecollector.VibeTab
 import com.vibecollector.data.FileNode
 import com.vibecollector.formatTime
+import com.vibecollector.ui.TreeRow
 import com.vibecollector.ui.VibeViewModel
 import com.vibecollector.ui.components.ProjectPicker
 import com.vibecollector.ui.components.RowMenu
@@ -92,7 +94,7 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
     var showNewFolder by remember { mutableStateOf(false) }
     var showNewProject by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
-    var exportProjectName by remember { mutableStateOf<String?>(null) }
+    var exportProjectName by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<FileNode?>(null) }
     var renameTarget by remember { mutableStateOf<FileNode?>(null) }
     var moveTarget by remember { mutableStateOf<FileNode?>(null) }
@@ -181,7 +183,7 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    label = { Text("Search this folder") },
+                    label = { Text("Search project") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                 )
@@ -192,9 +194,7 @@ fun FilesScreen(vm: VibeViewModel, padding: PaddingValues) {
                 return@Column
             }
 
-            val visibleRows = if (searchQuery.isBlank()) state.tree else state.tree.filter {
-                it.node.name.contains(searchQuery, ignoreCase = true) || it.node.path.contains(searchQuery, ignoreCase = true)
-            }
+            val visibleRows = if (searchQuery.isBlank()) state.tree else searchProject(state.catalog, searchQuery)
             if (visibleRows.isEmpty() && !browse.loading) {
                 EmptyHint(if (searchQuery.isBlank()) "This project is empty.\nGenerate a structure or copy code from a chatbot and it will show up here." else "No files match ‘$searchQuery’.")
                 return@Column
@@ -356,7 +356,7 @@ private fun FileRow(
     ) {
         if (node.isDirectory) {
             Icon(
-                imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = if (expanded) "Collapse" else "Expand",
                 tint = color,
                 modifier = Modifier.size(22.dp),
@@ -477,6 +477,29 @@ fun CodePreview(text: String, maxLines: Int = 6) {
             maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/** Project-wide matches plus their ancestor folders, ignoring expansion state. */
+internal fun searchProject(catalog: List<FileNode>, query: String): List<TreeRow> {
+    val q = query.trim()
+    if (q.isEmpty()) return emptyList()
+    val include = linkedSetOf<String>()
+    for (node in catalog) {
+        if (!node.name.contains(q, ignoreCase = true) && !node.path.contains(q, ignoreCase = true)) continue
+        include += node.path
+        var parent = node.path.substringBeforeLast('/', "")
+        while (parent.isNotEmpty()) {
+            include += parent
+            parent = parent.substringBeforeLast('/', "")
+        }
+    }
+    return catalog.filter { it.path in include }.map { node ->
+        val depth = node.path.count { it == '/' }
+        val expanded = node.isDirectory && catalog.any { child ->
+            child.path.startsWith(node.path + "/") && child.path in include
+        }
+        TreeRow(node, depth, expanded)
     }
 }
 

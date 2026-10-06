@@ -160,6 +160,7 @@ object CaptureNotifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val text = "${pending.size} captures • $files files waiting for your approval"
+        val canApproveAll = pending.none { it.hasUnnamed }
         val n = NotificationCompat.Builder(context, CHANNEL_CAPTURE)
             .setSmallIcon(R.drawable.ic_stat_vibe)
             .setContentTitle("Everything collected")
@@ -168,7 +169,7 @@ object CaptureNotifier {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
-            .addAction(0, "Approve all", approve)
+            .apply { if (canApproveAll) addAction(0, "Approve all", approve) }
             .addAction(0, "Discard all", discard)
             .build()
         post(context, SUMMARY_ID, n, SUMMARY_TAG)

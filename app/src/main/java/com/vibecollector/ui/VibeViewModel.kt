@@ -1,10 +1,12 @@
 package com.vibecollector.ui
 
 import android.app.Application
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.text.format.Formatter
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vibecollector.Vibe
@@ -41,6 +43,8 @@ data class TreeRow(val node: FileNode, val depth: Int, val expanded: Boolean)
 
 data class UiState(
     val tree: List<TreeRow> = emptyList(),
+    /** Every file and folder in the open project, independent of expansion. */
+    val catalog: List<FileNode> = emptyList(),
     val expanded: Set<String> = emptySet(),
     val projects: List<Project> = emptyList(),
     val browse: BrowseState = BrowseState(),
@@ -104,28 +108,51 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(browse = it.browse.copy(project = name, path = path, loading = true)) }
         val nodes = store.listDir(name, path)
         val expanded = if (sameProject) _state.value.expanded else emptySet()
-        val tree = buildTree(name, expanded)
-        _state.update { it.copy(browse = it.browse.copy(nodes = nodes, loading = false), expanded = expanded, tree = tree) }
+        val catalog = projectCatalog(name)
+        val tree = buildTree(catalog, expanded)
+        _state.update {
+            it.copy(
+                browse = it.browse.copy(nodes = nodes, loading = false),
+                expanded = expanded,
+                catalog = catalog,
+                tree = tree,
+            )
+        }
     }
 
-    private fun buildTree(project: String, expanded: Set<String>): List<TreeRow> {
-        val rows = mutableListOf<TreeRow>()
-        fun walk(path: String, depth: Int) {
+    private fun projectCatalog(project: String): List<FileNode> {
+        if (project.isBlank()) return emptyList()
+        val all = mutableListOf<FileNode>()
+        val seen = mutableSetOf("")
+        fun walk(path: String) {
             for (node in store.listDir(project, path)) {
-                val open = node.isDirectory && node.path in expanded
-                rows += TreeRow(node, depth, open)
-                if (open) walk(node.path, depth + 1)
+                if (!seen.add(node.path)) continue
+                all += node
+                if (node.isDirectory) walk(node.path)
             }
         }
-        if (project.isNotBlank()) walk("", 0)
+        walk("")
+        return all
+    }
+
+    private fun buildTree(catalog: List<FileNode>, expanded: Set<String>): List<TreeRow> {
+        val rows = mutableListOf<TreeRow>()
+        var skipBelow = -1
+        for (node in catalog) {
+            val depth = node.path.count { it == '/' }
+            if (skipBelow >= 0 && depth > skipBelow) continue
+            skipBelow = -1
+            val open = node.isDirectory && node.path in expanded
+            rows += TreeRow(node, depth, open)
+            if (node.isDirectory && !open) skipBelow = depth
+        }
         return rows
     }
 
     fun toggleFolder(node: FileNode) = viewModelScope.launch(Dispatchers.IO) {
-        val project = _state.value.browse.project
         val cur = _state.value.expanded
         val next = if (node.path in cur) cur - node.path else cur + node.path
-        _state.update { it.copy(expanded = next, tree = buildTree(project, next)) }
+        _state.update { it.copy(expanded = next, tree = buildTree(it.catalog, next)) }
     }
 
     fun navigateTo(node: FileNode) {
@@ -199,10 +226,15 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
         reports.forEachIndexed { index, report -> if (report.ok) CaptureNotifier.clearCapturePrompt(getApplication(), captures[index].id) }
         val conflictIndex = reports.indexOfFirst { it.conflicts.isNotEmpty() }
         val conflictCapture = captures.getOrNull(conflictIndex)
+        val saved = reports.count { it.ok }
+        val waiting = reports.count { !it.ok && it.conflicts.isEmpty() }
         _state.update {
             it.copy(
                 busy = false,
-                message = "Saved ${reports.count { r -> r.ok }} capture${if (reports.count { r -> r.ok } == 1) "" else "s"}",
+                message = buildString {
+                    append("Saved $saved capture${if (saved == 1) "" else "s"}")
+                    if (waiting > 0) append(", $waiting still waiting")
+                },
                 conflictCaptureId = conflictCapture?.id,
                 conflictPaths = reports.getOrNull(conflictIndex)?.conflicts.orEmpty(),
             )
@@ -304,15 +336,34 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun shareProject(name: String) {
-        val dir = store.projectDir(name) ?: return
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
-            putExtra(Intent.EXTRA_STREAM, Uri.fromFile(dir))
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "project" }
+            val zip = java.io.File(app.cacheDir, "$safe.zip")
+            val wrote = runCatching {
+                java.io.FileOutputStream(zip).use { store.writeProjectZip(name, it) }
+            }.getOrDefault(false)
+            if (!wrote) {
+                _state.update { it.copy(message = "Could not share $name") }
+                return@launch
+            }
+            val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", zip)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newRawUri(name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            Vibe.mainHandler.post {
+                runCatching {
+                    app.startActivity(
+                        Intent.createChooser(send, "Share $name").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }.onFailure {
+                    _state.update { state -> state.copy(message = "Could not share $name") }
+                }
+            }
         }
-        getApplication<Application>().startActivity(
-            Intent.createChooser(intent, "Share $name").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
     }
 
     fun readLog(): String = store.readCaptureLog(_state.value.browse.project)
@@ -454,7 +505,7 @@ class VibeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openOverlaySettings() {
         getApplication<Application>().startActivity(
-            com.vibecollector.overlay.BubbleService.overlaySettingsIntent()
+            com.vibecollector.overlay.BubbleService.overlaySettingsIntent(getApplication<Application>().packageName)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
